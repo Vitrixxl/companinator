@@ -34,6 +34,7 @@ import {
   requireOwner,
   requireSession,
 } from "./http"
+import { isAllowedWebOrigin } from "./origins"
 import {
   serializeCandidate,
   serializeCompany,
@@ -415,7 +416,7 @@ function broadcastConversation(conversationId: string, payload: unknown) {
 export const app = new Elysia()
   .use(
     cors({
-      origin: env.WEB_ORIGIN,
+      origin: isAllowedWebOrigin,
       credentials: true,
       allowedHeaders: ["content-type", "authorization"],
     }),

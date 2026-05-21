@@ -10,8 +10,62 @@ import type {
   MembershipDTO,
 } from "@workspace/shared"
 
-export const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3000/api"
-export const WS_URL = import.meta.env.VITE_WS_URL ?? "ws://localhost:3000/api/ws"
+const API_PORT = import.meta.env.VITE_API_PORT ?? "3000"
+
+function currentBrowserHost() {
+  if (typeof window === "undefined") {
+    return "localhost"
+  }
+  return window.location.hostname
+}
+
+function urlHost(hostname: string) {
+  return hostname.includes(":") ? `[${hostname}]` : hostname
+}
+
+function isLoopbackUrl(value: string) {
+  try {
+    const url = new URL(value)
+    return url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "::1"
+  } catch {
+    return false
+  }
+}
+
+function shouldReplaceLoopbackUrl(value: string | undefined) {
+  if (!value || typeof window === "undefined") {
+    return false
+  }
+
+  const browserHost = currentBrowserHost()
+  return browserHost !== "localhost" && browserHost !== "127.0.0.1" && browserHost !== "::1" && isLoopbackUrl(value)
+}
+
+function browserApiOrigin() {
+  if (typeof window === "undefined") {
+    return `http://localhost:${API_PORT}`
+  }
+
+  const protocol = window.location.protocol === "https:" ? "https:" : "http:"
+  return `${protocol}//${urlHost(currentBrowserHost())}:${API_PORT}`
+}
+
+function browserWsOrigin() {
+  if (typeof window === "undefined") {
+    return `ws://localhost:${API_PORT}`
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+  return `${protocol}//${urlHost(currentBrowserHost())}:${API_PORT}`
+}
+
+const configuredApiUrl = import.meta.env.VITE_API_URL || undefined
+const configuredWsUrl = import.meta.env.VITE_WS_URL || undefined
+
+export const API_URL =
+  configuredApiUrl && !shouldReplaceLoopbackUrl(configuredApiUrl) ? configuredApiUrl : `${browserApiOrigin()}/api`
+export const WS_URL =
+  configuredWsUrl && !shouldReplaceLoopbackUrl(configuredWsUrl) ? configuredWsUrl : `${browserWsOrigin()}/api/ws`
 const API_ORIGIN = API_URL.replace(/\/api\/?$/, "")
 
 export interface MeResponse {

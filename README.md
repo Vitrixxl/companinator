@@ -26,6 +26,8 @@ URLs:
 - API: http://localhost:3000
 - OpenAPI: http://localhost:3000/api/openapi
 
+Avec `bun run dev:web -- --host 0.0.0.0`, le front deduit automatiquement l'API depuis l'adresse ouverte dans le navigateur. Par exemple `http://10.43.161.120:5173` appellera `http://10.43.161.120:3000/api`.
+
 ## Comptes De Test
 
 Tous les comptes utilisent le mot de passe `Companinator123!`.
