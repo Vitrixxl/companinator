@@ -5,6 +5,15 @@
   "scripts": {
     "build": "turbo build",
     "dev": "turbo dev",
+    "dev:api": "bun run --filter api dev",
+    "dev:web": "bun run --filter web dev",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:generate": "bun run --filter api db:generate",
+    "db:migrate": "bun run --filter api db:migrate",
+    "db:seed": "bun run --filter api db:seed",
+    "ai:check": "bun run --filter api ai:check",
+    "embeddings:backfill": "bun run --filter api embeddings:backfill",
     "lint": "turbo lint",
     "format": "turbo format",
     "typecheck": "turbo typecheck"

@@ -1,21 +1,67 @@
-# shadcn/ui monorepo template
+# Companinator
 
-This is a Vite monorepo template with shadcn/ui.
+SaaS B2B de cartographie d'entreprise avec backend ElysiaJS, front React/shadcn UI, organigramme React Flow, messagerie, communaute, groupes, admin et recherche assistee par Ollama.
 
-## Adding components
+## Prerequis
 
-To add components to your app, run the following command at the root of your `web` app:
+- Bun 1.3+
+- Docker + Docker Compose
+- Ollama pour l'assistant IA, le parsing d'intention et les embeddings locaux
+
+## Lancement
 
 ```bash
-pnpm dlx shadcn@latest add button -c apps/web
+bun install
+cp .env.example .env
+bun run db:up
+bun run db:migrate
+bun run db:seed
+bun run dev:api
+bun run dev:web -- --host 0.0.0.0
 ```
 
-This will place the ui components in the `packages/ui/src/components` directory.
+URLs:
 
-## Using components
+- Front: http://localhost:5173
+- API: http://localhost:3000
+- OpenAPI: http://localhost:3000/api/openapi
 
-To use the components in your app, import them from the `ui` package.
+## Comptes De Test
 
-```tsx
-import { Button } from "@workspace/ui/components/button";
+Tous les comptes utilisent le mot de passe `Companinator123!`.
+
+- `admin@acme.local` - owner
+- `nadia.benali@acme.local` - admin
+- `ines.moreau@acme.local` - membre engineering
+- `mehdi.roux@acme.local` - membre sales
+
+Le seed cree `Acme France` avec 20 employes, 14 evenements, 5 groupes, 5 posts communautaires et 3 conversations.
+
+## Stockage Local
+
+Les images de l'onglet communaute sont stockees localement dans `apps/api/storage/community` et servies par l'API via `/api/uploads/community/:fileName`.
+Les uploads runtime sont ignores par Git; seules les images de seed `seed-*.svg` sont versionnees.
+
+## IA Locale
+
+L'assistant exige Ollama et les deux modeles locaux. Sans ca, l'API renvoie une erreur de setup au lieu de simuler une recherche IA.
+
+```bash
+ollama serve
+ollama pull llama3.2
+ollama pull embeddinggemma
+bun run ai:check
+bun run embeddings:backfill
 ```
+
+`bun run embeddings:backfill` genere les embeddings manquants des fiches de poste via `embeddinggemma` et les stocke dans Postgres/pgvector.
+
+## Scripts
+
+- `bun run typecheck`
+- `bun run build`
+- `bun run db:up`
+- `bun run db:migrate`
+- `bun run db:seed`
+- `bun run ai:check`
+- `bun run embeddings:backfill`

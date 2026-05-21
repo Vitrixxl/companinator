@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200" role="img" aria-label="Exploration embeddings">
+  <rect width="1200" height="1200" fill="#07111f"/>
+  <g stroke="#22d3ee" stroke-width="5" opacity=".55">
+    <path d="M250 320 510 500 760 390 940 680 650 820 370 720Z"/>
+    <path d="M510 500 650 820M760 390 370 720M250 320 940 680"/>
+  </g>
+  <g fill="#a7f3d0">
+    <circle cx="250" cy="320" r="34"/>
+    <circle cx="510" cy="500" r="34"/>
+    <circle cx="760" cy="390" r="34"/>
+    <circle cx="940" cy="680" r="34"/>
+    <circle cx="650" cy="820" r="34"/>
+    <circle cx="370" cy="720" r="34"/>
+  </g>
+  <text x="165" y="995" fill="#f8fafc" font-family="Inter, Arial, sans-serif" font-size="76" font-weight="700">Embeddings</text>
+  <text x="170" y="1065" fill="#67e8f9" font-family="Inter, Arial, sans-serif" font-size="36">Recherche semantique interne</text>
+</svg>

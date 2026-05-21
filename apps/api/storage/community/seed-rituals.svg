@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200" role="img" aria-label="Rituels managers">
+  <rect width="1200" height="1200" fill="#fff7ed"/>
+  <rect x="140" y="170" width="920" height="850" rx="48" fill="#ffffff" stroke="#fed7aa" stroke-width="8"/>
+  <text x="210" y="310" fill="#9a3412" font-family="Inter, Arial, sans-serif" font-size="70" font-weight="700">Manager rituals</text>
+  <g fill="#fdba74">
+    <rect x="210" y="420" width="780" height="78" rx="24"/>
+    <rect x="210" y="545" width="640" height="78" rx="24"/>
+    <rect x="210" y="670" width="720" height="78" rx="24"/>
+  </g>
+  <g fill="#16a34a">
+    <circle cx="250" cy="459" r="14"/>
+    <circle cx="250" cy="584" r="14"/>
+    <circle cx="250" cy="709" r="14"/>
+  </g>
+  <text x="300" y="475" fill="#431407" font-family="Inter, Arial, sans-serif" font-size="34">One-to-one</text>
+  <text x="300" y="600" fill="#431407" font-family="Inter, Arial, sans-serif" font-size="34">Disponibilites</text>
+  <text x="300" y="725" fill="#431407" font-family="Inter, Arial, sans-serif" font-size="34">Feedback</text>
+</svg>

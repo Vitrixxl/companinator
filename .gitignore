@@ -22,6 +22,10 @@ coverage
 # Build Outputs
 dist
 
+# Local uploads
+apps/api/storage/community/*
+!apps/api/storage/community/seed-*.svg
+
 # Debug
 npm-debug.log*
 

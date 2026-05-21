@@ -126,6 +126,30 @@
     @apply border-border outline-ring/50;
     }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
     }
+}
+
+.org-flow {
+  background:
+    linear-gradient(to right, color-mix(in oklch, var(--border) 42%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in oklch, var(--border) 42%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
+}
+
+.org-flow .react-flow__edge-path {
+  stroke-linecap: round;
+}
+
+.org-flow .react-flow__controls {
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px color-mix(in oklch, var(--foreground) 10%, transparent);
+}
+
+.org-flow .react-flow__controls button {
+  border-bottom-color: color-mix(in oklch, var(--border) 80%, transparent);
+  background: var(--card);
+  color: var(--foreground);
 }

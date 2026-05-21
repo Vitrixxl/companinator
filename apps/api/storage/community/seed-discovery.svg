@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1200" viewBox="0 0 1200 1200" role="img" aria-label="Discovery utilisateurs">
+  <rect width="1200" height="1200" fill="#111827"/>
+  <rect x="120" y="150" width="960" height="720" rx="54" fill="#f8fafc"/>
+  <rect x="180" y="230" width="410" height="70" rx="18" fill="#0f766e"/>
+  <rect x="180" y="350" width="790" height="36" rx="18" fill="#d1d5db"/>
+  <rect x="180" y="430" width="690" height="36" rx="18" fill="#e5e7eb"/>
+  <rect x="180" y="550" width="245" height="180" rx="32" fill="#fbbf24"/>
+  <rect x="475" y="550" width="245" height="180" rx="32" fill="#38bdf8"/>
+  <rect x="770" y="550" width="200" height="180" rx="32" fill="#fb7185"/>
+  <circle cx="260" cy="970" r="72" fill="#fbbf24"/>
+  <circle cx="390" cy="970" r="72" fill="#38bdf8"/>
+  <circle cx="520" cy="970" r="72" fill="#fb7185"/>
+  <text x="650" y="995" fill="#f9fafb" font-family="Inter, Arial, sans-serif" font-size="54" font-weight="700">User tests</text>
+</svg>

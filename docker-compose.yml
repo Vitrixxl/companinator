@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.2-pg18-trixie
+    container_name: companinator-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: companinator
+      POSTGRES_USER: companinator
+      POSTGRES_PASSWORD: companinator
+    ports:
+      - "5432:5432"
+    volumes:
+      - companinator-postgres:/var/lib/postgresql
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U companinator -d companinator"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  companinator-postgres:
