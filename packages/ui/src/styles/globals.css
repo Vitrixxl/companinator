@@ -132,9 +132,8 @@
 
 .org-flow {
   background:
-    linear-gradient(to right, color-mix(in oklch, var(--border) 42%, transparent) 1px, transparent 1px),
-    linear-gradient(to bottom, color-mix(in oklch, var(--border) 42%, transparent) 1px, transparent 1px);
-  background-size: 56px 56px;
+    radial-gradient(circle at 1px 1px, color-mix(in oklch, var(--foreground) 8%, transparent) 1px, transparent 0);
+  background-size: 24px 24px;
 }
 
 .org-flow .react-flow__edge-path {
@@ -152,4 +151,234 @@
   border-bottom-color: color-mix(in oklch, var(--border) 80%, transparent);
   background: var(--card);
   color: var(--foreground);
+}
+
+/* ─────────── Editorial workspace utilities ─────────── */
+
+.font-heading {
+  font-family: var(--font-heading);
+}
+
+.font-mono {
+  font-family: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+.eyebrow {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 0.6875rem;
+  line-height: 1;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.eyebrow-tight {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 0.625rem;
+  line-height: 1;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.slab-num {
+  font-family: var(--font-heading);
+  font-variant-numeric: tabular-nums lining-nums;
+  font-feature-settings: "ss01";
+  letter-spacing: -0.02em;
+  font-weight: 500;
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.section-marker {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* Subtle paper-grain background applied to the shell */
+.editorial-shell {
+  background-color: oklch(0.985 0.006 90);
+  background-image:
+    radial-gradient(circle at 1px 1px, color-mix(in oklch, var(--foreground) 5%, transparent) 1px, transparent 0);
+  background-size: 28px 28px;
+  background-attachment: fixed;
+}
+
+.dark .editorial-shell {
+  background-color: oklch(0.16 0.005 60);
+  background-image:
+    radial-gradient(circle at 1px 1px, color-mix(in oklch, var(--foreground) 7%, transparent) 1px, transparent 0);
+}
+
+/* Paper / panel surface — flat, ringed, no shadow. The editorial alternative to <Card>. */
+.panel {
+  background: var(--card);
+  border: 1px solid color-mix(in oklch, var(--border) 85%, transparent);
+  border-radius: var(--radius-xl);
+}
+
+.panel-flat {
+  background: var(--card);
+  border-top: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+  border-bottom: 1px solid color-mix(in oklch, var(--border) 70%, transparent);
+}
+
+/* Hairline divider used inside editorial layouts */
+.rule {
+  border-color: color-mix(in oklch, var(--border) 80%, transparent);
+}
+
+.rule-strong {
+  border-color: color-mix(in oklch, var(--foreground) 18%, transparent);
+}
+
+/* Dotted leader, like a table-of-contents row */
+.toc-leader {
+  background-image: radial-gradient(circle, color-mix(in oklch, var(--foreground) 30%, transparent) 0.8px, transparent 1px);
+  background-size: 5px 1px;
+  background-repeat: repeat-x;
+  background-position: 0 center;
+  height: 1px;
+  flex: 1;
+}
+
+/* Big slab numerals for KPIs / metric cards */
+.metric-figure {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: clamp(2.5rem, 4vw, 3.5rem);
+  line-height: 0.95;
+  letter-spacing: -0.035em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.metric-figure-sm {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  font-size: 1.75rem;
+  line-height: 1;
+  letter-spacing: -0.025em;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Editorial title — slab serif, wide leading */
+.editorial-title {
+  font-family: var(--font-heading);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  line-height: 1.05;
+}
+
+/* Pill / chip for rubrics (departments treated as magazine rubrics) */
+.rubric {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--foreground);
+}
+
+.rubric::before {
+  content: "";
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background-color: currentColor;
+  opacity: 0.85;
+}
+
+/* Soft scrollbar inside scroll areas of the editorial shell */
+.editorial-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.editorial-scroll::-webkit-scrollbar-thumb {
+  background: color-mix(in oklch, var(--foreground) 12%, transparent);
+  border-radius: 9999px;
+}
+
+/* Page transition: gentle stagger when section changes */
+@keyframes editorial-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.editorial-enter {
+  animation: editorial-fade-up 480ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.editorial-enter > * {
+  animation: editorial-fade-up 520ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+
+.editorial-enter > :nth-child(1) { animation-delay: 40ms; }
+.editorial-enter > :nth-child(2) { animation-delay: 90ms; }
+.editorial-enter > :nth-child(3) { animation-delay: 140ms; }
+.editorial-enter > :nth-child(4) { animation-delay: 190ms; }
+.editorial-enter > :nth-child(5) { animation-delay: 240ms; }
+.editorial-enter > :nth-child(6) { animation-delay: 290ms; }
+
+/* Selected nav indicator — a fine teal bar on the left edge */
+.nav-indicator[data-active="true"]::before {
+  content: "";
+  position: absolute;
+  left: -0.75rem;
+  top: 50%;
+  width: 2px;
+  height: 1.25rem;
+  transform: translateY(-50%);
+  background: var(--primary);
+  border-radius: 9999px;
+}
+
+/* Department dot for rubric chips */
+.dept-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  margin-right: 0.5rem;
+}
+
+/* Diagonal hatching for empty / placeholder zones */
+.hatch {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    color-mix(in oklch, var(--border) 60%, transparent),
+    color-mix(in oklch, var(--border) 60%, transparent) 1px,
+    transparent 1px,
+    transparent 8px
+  );
+}
+
+/* Active conversation card in messages */
+.thread-card[data-active="true"] {
+  background: color-mix(in oklch, var(--primary) 7%, var(--card));
+  border-color: color-mix(in oklch, var(--primary) 35%, var(--border));
+}
+
+/* Slab numeric clock-style for the live workspace indicator */
+.workspace-time {
+  font-family: var(--font-heading);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  font-weight: 500;
 }
