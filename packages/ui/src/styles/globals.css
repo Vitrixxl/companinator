@@ -33,7 +33,7 @@
     --chart-3: oklch(0.577 0.245 27.325);
     --chart-4: oklch(0.505 0.213 27.518);
     --chart-5: oklch(0.444 0.177 26.899);
-    --radius: 0.625rem;
+    --radius: 0.875rem;
     --sidebar: oklch(0.985 0.001 106.423);
     --sidebar-foreground: oklch(0.147 0.004 49.25);
     --sidebar-primary: oklch(0.596 0.145 163.225);
@@ -138,6 +138,13 @@
 
 .org-flow .react-flow__edge-path {
   stroke-linecap: round;
+  transition: stroke-width 160ms ease, filter 160ms ease;
+  filter: drop-shadow(0 3px 6px color-mix(in oklch, var(--foreground) 10%, transparent));
+}
+
+.org-flow .react-flow__edge:hover .react-flow__edge-path {
+  stroke-width: 3px;
+  filter: drop-shadow(0 8px 14px color-mix(in oklch, var(--foreground) 18%, transparent));
 }
 
 .org-flow .react-flow__controls {
@@ -151,6 +158,17 @@
   border-bottom-color: color-mix(in oklch, var(--border) 80%, transparent);
   background: var(--card);
   color: var(--foreground);
+}
+
+.employee-flow-card {
+  --dept-edge: var(--primary);
+}
+
+.employee-flow-card:hover {
+  border-color: var(--dept-edge);
+  box-shadow:
+    0 18px 40px color-mix(in oklch, var(--dept-edge) 16%, transparent),
+    0 0 0 1px color-mix(in oklch, var(--dept-edge) 55%, transparent);
 }
 
 /* ─────────── Editorial workspace utilities ─────────── */
@@ -221,7 +239,7 @@
 .panel {
   background: var(--card);
   border: 1px solid color-mix(in oklch, var(--border) 85%, transparent);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-2xl);
 }
 
 .panel-flat {
@@ -360,6 +378,7 @@
 
 /* Diagonal hatching for empty / placeholder zones */
 .hatch {
+  border-radius: var(--radius-xl);
   background-image: repeating-linear-gradient(
     -45deg,
     color-mix(in oklch, var(--border) 60%, transparent),

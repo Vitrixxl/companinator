@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react"
 import dagre from "dagre"
 import { format } from "date-fns"
 import {
@@ -83,6 +83,7 @@ import {
   askAssistant,
   assetUrl,
   createEmployee,
+  createConversation,
   createEvent,
   createGroup,
   createPost,
@@ -193,6 +194,7 @@ type DepartmentTone = {
   dot: string
   text: string
   accent: string
+  edge: string
 }
 
 function departmentTone(department: string | null | undefined): DepartmentTone {
@@ -209,6 +211,7 @@ function departmentTone(department: string | null | undefined): DepartmentTone {
       dot: "bg-emerald-500",
       text: "text-emerald-700 dark:text-emerald-300",
       accent: "border-l-emerald-500",
+      edge: "oklch(0.696 0.17 162.48)",
     }
   }
 
@@ -223,6 +226,7 @@ function departmentTone(department: string | null | undefined): DepartmentTone {
       dot: "bg-blue-500",
       text: "text-blue-700 dark:text-blue-300",
       accent: "border-l-blue-500",
+      edge: "oklch(0.623 0.214 259.815)",
     }
   }
 
@@ -237,6 +241,7 @@ function departmentTone(department: string | null | undefined): DepartmentTone {
       dot: "bg-amber-500",
       text: "text-amber-700 dark:text-amber-300",
       accent: "border-l-amber-500",
+      edge: "oklch(0.769 0.188 70.08)",
     }
   }
 
@@ -251,6 +256,7 @@ function departmentTone(department: string | null | undefined): DepartmentTone {
       dot: "bg-rose-500",
       text: "text-rose-700 dark:text-rose-300",
       accent: "border-l-rose-500",
+      edge: "oklch(0.645 0.246 16.439)",
     }
   }
 
@@ -265,6 +271,7 @@ function departmentTone(department: string | null | undefined): DepartmentTone {
       dot: "bg-slate-500",
       text: "text-slate-700 dark:text-slate-300",
       accent: "border-l-slate-500",
+      edge: "oklch(0.554 0.046 257.417)",
     }
   }
 
@@ -278,6 +285,7 @@ function departmentTone(department: string | null | undefined): DepartmentTone {
     dot: "bg-cyan-500",
     text: "text-cyan-700 dark:text-cyan-300",
     accent: "border-l-cyan-500",
+    edge: "oklch(0.715 0.143 215.221)",
   }
 }
 
@@ -766,14 +774,20 @@ function EmployeeNode({ data, selected }: NodeProps<EmployeeFlowNode>) {
 
   return (
     <div
+      style={{ "--dept-edge": tone.edge } as CSSProperties}
       className={cn(
-        "group relative w-[296px] overflow-hidden rounded-lg border-l-[3px] bg-card text-card-foreground shadow-sm ring-1 ring-foreground/8 transition duration-150",
-        tone.accent,
-        "hover:-translate-y-0.5 hover:shadow-md",
-        selected && "shadow-md ring-2 ring-primary/30",
+        "employee-flow-card group relative w-[296px] overflow-hidden rounded-2xl border border-border/80 bg-card/95 text-card-foreground shadow-sm ring-1 ring-foreground/8 backdrop-blur transition duration-150",
+        "hover:-translate-y-0.5 hover:shadow-lg",
+        selected && "border-primary/70 shadow-lg ring-2 ring-primary/35",
       )}
     >
-      <Handle className="opacity-0" isConnectable={false} position={Position.Top} type="target" />
+      <Handle
+        id="target-top"
+        className="opacity-0"
+        isConnectable={false}
+        position={Position.Top}
+        type="target"
+      />
       <div className="grid gap-2 px-4 py-3">
         <div className="flex items-start justify-between gap-3">
           <span className="eyebrow-tight" style={{ color: undefined }}>
@@ -791,7 +805,7 @@ function EmployeeNode({ data, selected }: NodeProps<EmployeeFlowNode>) {
         <div className="flex items-start gap-3">
           <div
             className={cn(
-              "grid size-10 shrink-0 place-items-center rounded-md text-xs font-semibold ring-1",
+              "grid size-10 shrink-0 place-items-center rounded-xl text-xs font-semibold ring-1",
               tone.avatar,
             )}
           >
@@ -809,7 +823,21 @@ function EmployeeNode({ data, selected }: NodeProps<EmployeeFlowNode>) {
           <span className="truncate">{data.managerName ? `↗ ${data.managerName}` : "Direction"}</span>
         </div>
       </div>
-      <Handle className="opacity-0" isConnectable={false} position={Position.Bottom} type="source" />
+      {[
+        ["source-left", "26%"],
+        ["source-center", "50%"],
+        ["source-right", "74%"],
+      ].map(([id, left]) => (
+        <Handle
+          key={id}
+          id={id}
+          className="opacity-0"
+          isConnectable={false}
+          position={Position.Bottom}
+          style={{ left }}
+          type="source"
+        />
+      ))}
     </div>
   )
 }
@@ -867,30 +895,45 @@ function HierarchyPage({
   onSelectEmployee: (employee: EmployeeDTO) => void
 }) {
   const hierarchy = useQuery({ queryKey: ["hierarchy", companyId], queryFn: () => getHierarchy(companyId) })
-  const flowEdges: Edge[] = useMemo(
-    () =>
-      (hierarchy.data?.edges ?? []).map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        animated: false,
-        type: "smoothstep",
-        markerEnd: {
-          type: MarkerType.ArrowClosed,
-          color: "oklch(0.709 0.01 56.259)",
-          width: 14,
-          height: 14,
-        },
-        style: {
-          stroke: "oklch(0.709 0.01 56.259)",
-          strokeWidth: 1.4,
-        },
-      })),
-    [hierarchy.data?.edges],
-  )
   const hierarchyEmployees = useMemo(
     () => (hierarchy.data?.nodes ?? []).map((node) => node.employee),
     [hierarchy.data?.nodes],
+  )
+  const employeesById = useMemo(
+    () => new Map(hierarchyEmployees.map((employee) => [employee.id, employee])),
+    [hierarchyEmployees],
+  )
+  const flowEdges: Edge[] = useMemo(
+    () => {
+      const handleIds = ["source-left", "source-center", "source-right"]
+      const sourceIndexes = new Map<string, number>()
+
+      return (hierarchy.data?.edges ?? []).map((edge) => {
+        const index = sourceIndexes.get(edge.source) ?? 0
+        sourceIndexes.set(edge.source, index + 1)
+        const sourceTone = departmentTone(employeesById.get(edge.source)?.department)
+        return {
+          id: edge.id,
+          source: edge.source,
+          sourceHandle: handleIds[index % handleIds.length],
+          target: edge.target,
+          targetHandle: "target-top",
+          animated: false,
+          type: "bezier",
+          markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: sourceTone.edge,
+            width: 16,
+            height: 16,
+          },
+          style: {
+            stroke: sourceTone.edge,
+            strokeWidth: 2.1,
+          },
+        }
+      })
+    },
+    [employeesById, hierarchy.data?.edges],
   )
   const flowNodes = useMemo(() => buildFlow(hierarchyEmployees, flowEdges), [hierarchyEmployees, flowEdges])
   const departments = useMemo(
@@ -903,51 +946,48 @@ function HierarchyPage({
   )
 
   return (
-    <div className="editorial-enter grid gap-6">
-      <PageOpener
-        marker="02"
-        eyebrow="Cartographie · Structure manageriale"
-        title="L'organigramme."
-        description="Une vue lisible des rattachements, des departements et des fonctions. Chaque carte est interactive — cliquez pour ouvrir le profil."
-        meta={
-          <div className="grid grid-cols-3 gap-6 text-right">
-            <div className="grid gap-1">
-              <span className="metric-figure-sm">{hierarchyEmployees.length}</span>
-              <span className="eyebrow-tight">Employes</span>
+    <div className="editorial-enter">
+      <div className="panel relative flex h-[calc(100svh-10rem)] min-h-[560px] flex-col overflow-hidden">
+        <div className="relative z-10 flex shrink-0 flex-wrap items-center justify-between gap-4 border-b bg-card/92 px-4 py-3 backdrop-blur">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="grid size-9 place-items-center rounded-xl bg-primary/10 text-primary">
+              <Network className="size-4" />
             </div>
-            <div className="grid gap-1">
-              <span className="metric-figure-sm">{departments.length}</span>
-              <span className="eyebrow-tight">Equipes</span>
-            </div>
-            <div className="grid gap-1">
-              <span className="metric-figure-sm">{managerIds.size}</span>
-              <span className="eyebrow-tight">Managers</span>
+            <div className="min-w-0">
+              <span className="eyebrow">Organigramme</span>
+              <p className="line-clamp-1 text-xs text-muted-foreground">
+                Cliquez sur une carte pour ouvrir le profil.
+              </p>
             </div>
           </div>
-        }
-      />
-
-      <div className="flex flex-wrap items-center gap-4">
-        <span className="eyebrow">Legende</span>
-        <Separator orientation="vertical" className="h-4" />
-        <div className="flex flex-wrap gap-3">
-          {departments.map((department) => {
-            const tone = departmentTone(department)
-            return (
-              <span key={department} className="flex items-center gap-1.5 text-xs">
-                <span className={cn("size-2 rounded-full", tone.dot)} />
-                <span className="font-medium">{department}</span>
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <div className="hidden items-center gap-3 text-right sm:flex">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {hierarchyEmployees.length} employes
               </span>
-            )
-          })}
+              <Separator orientation="vertical" className="h-4" />
+              <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+                {managerIds.size} managers
+              </span>
+            </div>
+            <Separator orientation="vertical" className="hidden h-4 sm:block" />
+            <div className="flex max-w-[44rem] flex-wrap justify-end gap-2">
+              {departments.map((department) => {
+                const tone = departmentTone(department)
+                return (
+                  <span
+                    key={department}
+                    className="inline-flex items-center gap-1.5 rounded-full border bg-background/80 px-2.5 py-1 text-[11px] font-medium"
+                  >
+                    <span className={cn("size-2 rounded-full", tone.dot)} />
+                    {department}
+                  </span>
+                )
+              })}
+            </div>
+          </div>
         </div>
-      </div>
-
-      <div className="panel relative h-[calc(100svh-22rem)] min-h-[640px] overflow-hidden">
-        <div className="pointer-events-none absolute left-4 top-4 z-10 flex items-center gap-2 rounded-md border bg-background/90 px-3 py-1.5 font-mono text-[11px] uppercase tracking-wider text-muted-foreground backdrop-blur">
-          <Network className="size-3" />
-          Org · {hierarchyEmployees.length} nodes
-        </div>
+        <div className="relative min-h-0 flex-1">
         <ReactFlow
           className="org-flow"
           nodes={flowNodes}
@@ -963,6 +1003,7 @@ function HierarchyPage({
           <Background color="oklch(0.709 0.01 56.259)" gap={28} size={1} />
           <Controls className="org-flow-controls" showInteractive={false} />
         </ReactFlow>
+        </div>
       </div>
     </div>
   )
@@ -1553,10 +1594,14 @@ function MessagesPage({
   companyId,
   employees,
   meEmployeeId,
+  selectedConversationId,
+  onSelectedConversationOpened,
 }: {
   companyId: string
   employees: EmployeeDTO[]
   meEmployeeId: string | null
+  selectedConversationId: string | null
+  onSelectedConversationOpened: () => void
 }) {
   const client = useQueryClient()
   const conversations = useQuery({
@@ -1581,10 +1626,19 @@ function MessagesPage({
   })
 
   useEffect(() => {
+    if (selectedConversationId && selectedConversationId !== conversationId) {
+      setConversationId(selectedConversationId)
+      onSelectedConversationOpened()
+      return
+    }
+    if (selectedConversationId) {
+      onSelectedConversationOpened()
+    }
+
     if (!conversationId && conversations.data?.[0]) {
       setConversationId(conversations.data[0].id)
     }
-  }, [conversationId, conversations.data])
+  }, [conversationId, conversations.data, onSelectedConversationOpened, selectedConversationId])
 
   useEffect(() => {
     if (!conversationId) {
@@ -2187,16 +2241,22 @@ function AdminPage({
 function EmployeeSheet({
   companyId,
   employee,
+  meEmployeeId,
+  onMessageEmployee,
   onOpenChange,
 }: {
   companyId: string
   employee: EmployeeDTO | null
+  meEmployeeId: string | null
+  onMessageEmployee: (employee: EmployeeDTO) => Promise<void>
   onOpenChange: (open: boolean) => void
 }) {
   const client = useQueryClient()
   const [title, setTitle] = useState("")
   const [startsAt, setStartsAt] = useState(localDateTime(24))
   const [endsAt, setEndsAt] = useState(localDateTime(25))
+  const [messageError, setMessageError] = useState<string | null>(null)
+  const [openingMessage, setOpeningMessage] = useState(false)
   const events = useQuery({
     queryKey: ["employee-events", companyId, employee?.id],
     queryFn: () => getEmployeeEvents(companyId, employee!.id),
@@ -2218,6 +2278,12 @@ function EmployeeSheet({
   })
 
   const tone = departmentTone(employee?.department)
+  const isCurrentUser = Boolean(employee && meEmployeeId === employee.id)
+
+  useEffect(() => {
+    setMessageError(null)
+    setOpeningMessage(false)
+  }, [employee?.id])
 
   return (
     <Sheet open={Boolean(employee)} onOpenChange={onOpenChange}>
@@ -2246,6 +2312,29 @@ function EmployeeSheet({
             </SheetHeader>
 
             <div className="grid gap-5 p-4">
+              <div className="panel grid gap-3 p-4">
+                <Button
+                  className="rounded-xl"
+                  disabled={isCurrentUser || openingMessage}
+                  onClick={async () => {
+                    setMessageError(null)
+                    setOpeningMessage(true)
+                    try {
+                      await onMessageEmployee(employee)
+                    } catch (error) {
+                      setMessageError(error instanceof Error ? error.message : "Impossible d'ouvrir la conversation")
+                    } finally {
+                      setOpeningMessage(false)
+                    }
+                  }}
+                  type="button"
+                >
+                  <MessageSquare />
+                  {isCurrentUser ? "Votre profil" : openingMessage ? "Ouverture..." : "Envoyer un message"}
+                </Button>
+                {messageError ? <p className="text-xs text-destructive">{messageError}</p> : null}
+              </div>
+
               <div className="panel grid gap-3 p-4">
                 <div className="flex items-center gap-2">
                   <FileText className="size-4 text-muted-foreground" />
@@ -2345,6 +2434,7 @@ function AppShell() {
   const me = useQuery({ queryKey: ["me"], queryFn: getMe, retry: false })
   const [section, setSection] = useState<Section>("dashboard")
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeDTO | null>(null)
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
   const companyId = me.data?.activeCompanyId ?? null
   const membership = me.data?.memberships.find((item) => item.companyId === companyId) ?? null
   const isAdmin = membership?.role === "owner" || membership?.role === "admin"
@@ -2365,6 +2455,47 @@ function AppShell() {
     enabled: Boolean(companyId),
   })
   const now = useClock()
+
+  async function openMessageWithEmployee(employee: EmployeeDTO) {
+    if (!companyId) {
+      throw new Error("Entreprise introuvable")
+    }
+
+    const meEmployeeId = me.data?.employee?.id
+    if (!meEmployeeId || meEmployeeId === employee.id) {
+      return
+    }
+
+    const existing = (conversationsQuery.data ?? []).find((conversation) => {
+      const participants = conversation.participantEmployeeIds
+      return (
+        conversation.type === "direct" &&
+        participants.length === 2 &&
+        participants.includes(meEmployeeId) &&
+        participants.includes(employee.id)
+      )
+    })
+
+    const conversation =
+      existing ??
+      (await createConversation(companyId, {
+        type: "direct",
+        participantEmployeeIds: [employee.id],
+      }))
+
+    if (!existing) {
+      client.setQueryData<ConversationDTO[]>(["conversations", companyId], (current = []) => [conversation, ...current])
+      void client.invalidateQueries({ queryKey: ["conversations", companyId] })
+    }
+
+    setSelectedConversationId(conversation.id)
+    setSelectedEmployee(null)
+    setSection("messages")
+  }
+
+  const clearSelectedConversation = useCallback(() => {
+    setSelectedConversationId(null)
+  }, [])
 
   if (me.isLoading) {
     return (
@@ -2570,7 +2701,12 @@ function AppShell() {
           </ScrollArea>
         </div>
 
-        <div className="px-4 py-6 lg:px-10 lg:py-8">
+        <div
+          className={cn(
+            "px-4 py-6 lg:px-10 lg:py-8",
+            section === "hierarchy" && "px-3 py-3 lg:px-5 lg:py-4",
+          )}
+        >
           {section === "dashboard" ? (
             <DashboardPage
               companyId={companyId}
@@ -2594,6 +2730,8 @@ function AppShell() {
               companyId={companyId}
               employees={employees}
               meEmployeeId={me.data?.employee?.id ?? null}
+              selectedConversationId={selectedConversationId}
+              onSelectedConversationOpened={clearSelectedConversation}
             />
           ) : null}
           {section === "community" ? <CommunityPage companyId={companyId} employees={employees} /> : null}
@@ -2607,6 +2745,7 @@ function AppShell() {
           ) : null}
         </div>
 
+        {section !== "hierarchy" ? (
         <footer className="border-t bg-card/60 px-4 py-4 lg:px-10">
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
             <div className="flex items-center gap-3">
@@ -2622,11 +2761,14 @@ function AppShell() {
             </div>
           </div>
         </footer>
+        ) : null}
       </main>
 
       <EmployeeSheet
         companyId={companyId}
         employee={selectedEmployee}
+        meEmployeeId={me.data?.employee?.id ?? null}
+        onMessageEmployee={openMessageWithEmployee}
         onOpenChange={(open) => !open && setSelectedEmployee(null)}
       />
     </div>

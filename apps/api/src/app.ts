@@ -912,6 +912,28 @@ export const app = new Elysia()
         throw new HttpError(400, "Un participant est introuvable")
       }
 
+      if (input.type === "direct" && participantIds.length === 2) {
+        const [existingDirect] = await db
+          .select({ conversationId: conversationParticipants.conversationId })
+          .from(conversationParticipants)
+          .innerJoin(conversations, eq(conversations.id, conversationParticipants.conversationId))
+          .where(
+            and(
+              eq(conversations.companyId, companyId),
+              eq(conversations.type, "direct"),
+              inArray(conversationParticipants.employeeId, participantIds),
+            ),
+          )
+          .groupBy(conversationParticipants.conversationId)
+          .having(sql`count(distinct ${conversationParticipants.employeeId}) = 2 and count(*) = 2`)
+          .limit(1)
+
+        if (existingDirect) {
+          const rows = await buildConversationRows(companyId, [existingDirect.conversationId])
+          return serializeConversation(rows[0])
+        }
+      }
+
       const [conversation] = await db
         .insert(conversations)
         .values({

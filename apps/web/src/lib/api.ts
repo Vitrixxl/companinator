@@ -191,6 +191,16 @@ export function askAssistant(companyId: string, query: string) {
   })
 }
 
+export function createConversation(
+  companyId: string,
+  payload: { title?: string | null; type?: "direct" | "group"; participantEmployeeIds: string[] },
+) {
+  return apiFetch<ConversationDTO>(`/companies/${companyId}/conversations`, {
+    method: "POST",
+    body: JSON.stringify({ type: "direct", title: null, ...payload }),
+  })
+}
+
 export function sendMessage(companyId: string, conversationId: string, body: string) {
   return apiFetch<MessageDTO>(`/companies/${companyId}/conversations/${conversationId}/messages`, {
     method: "POST",
