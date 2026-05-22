@@ -99,6 +99,8 @@ import {
   signOut,
   streamAssistant,
   type AssistantStreamMetadata,
+  type DashboardResponse,
+  type HierarchyResponse,
   updateCompanySettings,
 } from "./lib/api"
 
@@ -324,6 +326,49 @@ function slugifyCompanyName(value: string) {
 function shortDate(value: string | null | undefined) {
   if (!value) return "—"
   return format(new Date(value), "dd MMM, HH:mm")
+}
+
+function hierarchyFromEmployees(employees: EmployeeDTO[]): HierarchyResponse {
+  return {
+    nodes: employees.map((employee) => ({ id: employee.id, employee })),
+    edges: employees
+      .filter((employee) => employee.managerId)
+      .map((employee) => ({
+        id: `${employee.managerId}-${employee.id}`,
+        source: employee.managerId!,
+        target: employee.id,
+      })),
+  }
+}
+
+function mergeEmployees(current: EmployeeDTO[], imported: EmployeeDTO[]) {
+  const byId = new Map(current.map((employee) => [employee.id, employee]))
+  for (const employee of imported) {
+    byId.set(employee.id, employee)
+  }
+  return Array.from(byId.values()).sort((left, right) => left.name.localeCompare(right.name))
+}
+
+function applyHierarchyImportCache(
+  client: ReturnType<typeof useQueryClient>,
+  companyId: string,
+  result: { employees: EmployeeDTO[] },
+) {
+  const currentEmployees = client.getQueryData<EmployeeDTO[]>(["employees", companyId])
+  const currentHierarchy = client.getQueryData<HierarchyResponse>(["hierarchy", companyId])
+  const baseEmployees = currentEmployees ?? currentHierarchy?.nodes.map((node) => node.employee) ?? []
+  const mergedEmployees = mergeEmployees(baseEmployees, result.employees)
+
+  client.setQueryData<EmployeeDTO[]>(["employees", companyId], mergedEmployees)
+  client.setQueryData<HierarchyResponse>(["hierarchy", companyId], hierarchyFromEmployees(mergedEmployees))
+  client.setQueryData<DashboardResponse>(["dashboard", companyId], (current) =>
+    current ? { ...current, employees: mergedEmployees.length } : current,
+  )
+  client.setQueryData<SystemCompanyDTO[]>(["super-admin-companies"], (current) =>
+    current?.map((company) =>
+      company.id === companyId ? { ...company, employeeCount: mergedEmployees.length } : company,
+    ),
+  )
 }
 
 function isoWeek(date: Date) {
@@ -918,6 +963,7 @@ function HierarchyPage({
     mutationFn: (file: File) => importHierarchyCsv(companyId, file),
     onSuccess: (result) => {
       setImportSummary(`${result.created} crees · ${result.updated} mis a jour · ${result.linked} liens`)
+      applyHierarchyImportCache(client, companyId, result)
       void client.invalidateQueries({ queryKey: ["hierarchy", companyId] })
       void client.invalidateQueries({ queryKey: ["employees", companyId] })
       void client.invalidateQueries({ queryKey: ["dashboard", companyId] })
@@ -2461,6 +2507,7 @@ function SuperAdminPage({
         ...current,
         [variables.companyId]: `${result.created} crees · ${result.updated} mis a jour · ${result.linked} liens`,
       }))
+      applyHierarchyImportCache(client, variables.companyId, result)
       void client.invalidateQueries({ queryKey: ["super-admin-companies"] })
       void client.invalidateQueries({ queryKey: ["hierarchy", variables.companyId] })
       void client.invalidateQueries({ queryKey: ["employees", variables.companyId] })
