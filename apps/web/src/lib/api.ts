@@ -6,6 +6,7 @@ import type {
   EmployeeDTO,
   EmployeeEventDTO,
   GroupDTO,
+  HierarchyImportResultDTO,
   MessageDTO,
   MembershipDTO,
   SystemCompanyDTO,
@@ -178,6 +179,12 @@ export function createEmployee(companyId: string, payload: Partial<EmployeeDTO>)
     method: "POST",
     body: JSON.stringify(payload),
   })
+}
+
+export function importHierarchyCsv(companyId: string, file: File) {
+  const formData = new FormData()
+  formData.append("file", file)
+  return apiFormFetch<HierarchyImportResultDTO>(`/companies/${companyId}/hierarchy/import`, formData)
 }
 
 export function createEvent(companyId: string, employeeId: string, payload: Record<string, unknown>) {

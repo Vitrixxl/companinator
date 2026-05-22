@@ -1,0 +1,7 @@
+id,superieur_id,nom,email,poste,departement,description_de_poste
+ceo,,Amandine Dupont,amandine.dupont@example.com,CEO,Direction,"Dirige l'entreprise, arbitre les priorites et anime le comite de direction."
+cto,ceo,Karim Haddad,karim.haddad@example.com,CTO,Engineering,"Pilote la strategie technique, les choix d'architecture et la qualite de livraison."
+product_lead,ceo,Lea Bernard,lea.bernard@example.com,Product Lead,Produit,"Structure la discovery, priorise la roadmap et coordonne les equipes produit."
+backend_dev,cto,Hugo Faure,hugo.faure@example.com,Developpeur Backend,Engineering,"Construit les API, fiabilise les integrations et maintient les services backend."
+frontend_dev,cto,Ines Moreau,ines.moreau@example.com,Developpeuse Frontend,Engineering,"Developpe les interfaces React, les composants UI et les parcours utilisateurs."
+designer,product_lead,Emma Caron,emma.caron@example.com,Product Designer,Produit,"Concoit les parcours, prototypes et systemes d'interface pour les equipes produit."

@@ -32,6 +32,7 @@ import {
   jsonError,
   isSuperAdminEmail,
   requireAdmin,
+  requireAdminOrSuperAdmin,
   requireMembership,
   requireOwner,
   requireSession,
@@ -104,6 +105,10 @@ const groupInput = z.object({
 
 const assistantInput = z.object({
   query: z.string().min(2),
+})
+
+const hierarchyCsvInput = z.object({
+  csv: z.string().min(1),
 })
 
 const nullableString = z.preprocess((value) => {
@@ -297,6 +302,344 @@ function parseBody<T>(schema: z.ZodType<T>, body: unknown) {
 
 function param(value: unknown) {
   return String(value)
+}
+
+type HierarchyCsvRow = {
+  csvId: string
+  managerCsvId: string | null
+  name: string
+  email: string | null
+  title: string | null
+  department: string | null
+  jobDescription: string | null
+  rowNumber: number
+}
+
+const csvColumnAliases = {
+  id: ["id", "employee_id", "identifiant"],
+  managerId: ["superieur_id", "superior_id", "manager_id", "supervisor_id", "parent_id", "superieur"],
+  name: ["nom", "name", "full_name", "prenom_nom"],
+  email: ["email", "mail"],
+  title: ["poste", "title", "job_title", "fonction", "role"],
+  department: ["departement", "department", "equipe", "team", "service"],
+  jobDescription: ["description_de_poste", "job_description", "fiche_de_poste", "description", "missions"],
+}
+
+function normalizeCsvHeader(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+}
+
+function normalizeNullableCsvValue(value: string | undefined) {
+  const trimmed = (value ?? "").trim()
+  if (!trimmed || /^(null|none|n\/a|na|root|-)$/.test(trimmed.toLowerCase())) {
+    return null
+  }
+  return trimmed
+}
+
+function detectCsvDelimiter(input: string) {
+  let commaCount = 0
+  let semicolonCount = 0
+  let inQuotes = false
+
+  for (const character of input.slice(0, 2048)) {
+    if (character === "\"") {
+      inQuotes = !inQuotes
+      continue
+    }
+    if (inQuotes) {
+      continue
+    }
+    if (character === ",") {
+      commaCount += 1
+    }
+    if (character === ";") {
+      semicolonCount += 1
+    }
+    if (character === "\n") {
+      break
+    }
+  }
+
+  return semicolonCount > commaCount ? ";" : ","
+}
+
+function parseCsvRecords(input: string) {
+  const delimiter = detectCsvDelimiter(input)
+  const records: string[][] = []
+  let row: string[] = []
+  let field = ""
+  let inQuotes = false
+
+  const source = input.replace(/^\uFEFF/, "")
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index]
+    const next = source[index + 1]
+
+    if (character === "\"") {
+      if (inQuotes && next === "\"") {
+        field += "\""
+        index += 1
+      } else {
+        inQuotes = !inQuotes
+      }
+      continue
+    }
+
+    if (character === delimiter && !inQuotes) {
+      row.push(field)
+      field = ""
+      continue
+    }
+
+    if ((character === "\n" || character === "\r") && !inQuotes) {
+      if (character === "\r" && next === "\n") {
+        index += 1
+      }
+      row.push(field)
+      records.push(row)
+      row = []
+      field = ""
+      continue
+    }
+
+    field += character
+  }
+
+  if (inQuotes) {
+    throw new HttpError(400, "CSV invalide: guillemet non ferme")
+  }
+
+  row.push(field)
+  records.push(row)
+
+  return records.filter((record) => record.some((cell) => cell.trim()))
+}
+
+function findCsvColumn(headers: string[], aliases: string[]) {
+  const normalizedAliases = aliases.map(normalizeCsvHeader)
+  const index = headers.findIndex((header) => normalizedAliases.includes(header))
+  return index >= 0 ? index : null
+}
+
+function csvCell(record: string[], index: number | null) {
+  if (index === null) {
+    return undefined
+  }
+  return record[index]
+}
+
+function parseHierarchyCsv(csv: string) {
+  const records = parseCsvRecords(csv)
+  if (records.length < 2) {
+    throw new HttpError(400, "Le CSV doit contenir une ligne d'en-tete et au moins une personne")
+  }
+
+  const headers = records[0]!.map(normalizeCsvHeader)
+  const columns = {
+    id: findCsvColumn(headers, csvColumnAliases.id),
+    managerId: findCsvColumn(headers, csvColumnAliases.managerId),
+    name: findCsvColumn(headers, csvColumnAliases.name),
+    email: findCsvColumn(headers, csvColumnAliases.email),
+    title: findCsvColumn(headers, csvColumnAliases.title),
+    department: findCsvColumn(headers, csvColumnAliases.department),
+    jobDescription: findCsvColumn(headers, csvColumnAliases.jobDescription),
+  }
+
+  if (columns.id === null || columns.name === null) {
+    throw new HttpError(400, "Colonnes requises: id, nom. Le superieur_id peut etre vide pour la racine.")
+  }
+
+  const rows: HierarchyCsvRow[] = records.slice(1).map((record, index) => {
+    const rowNumber = index + 2
+    const csvId = normalizeNullableCsvValue(csvCell(record, columns.id))
+    const name = normalizeNullableCsvValue(csvCell(record, columns.name))
+
+    if (!csvId) {
+      throw new HttpError(400, `Ligne ${rowNumber}: id manquant`)
+    }
+    if (!name) {
+      throw new HttpError(400, `Ligne ${rowNumber}: nom manquant`)
+    }
+
+    return {
+      csvId,
+      managerCsvId: normalizeNullableCsvValue(csvCell(record, columns.managerId)),
+      name,
+      email: normalizeNullableCsvValue(csvCell(record, columns.email))?.toLowerCase() ?? null,
+      title: normalizeNullableCsvValue(csvCell(record, columns.title)),
+      department: normalizeNullableCsvValue(csvCell(record, columns.department)),
+      jobDescription: normalizeNullableCsvValue(csvCell(record, columns.jobDescription)),
+      rowNumber,
+    }
+  })
+
+  if (rows.length > 500) {
+    throw new HttpError(400, "Import limite a 500 personnes par CSV")
+  }
+
+  const byCsvId = new Map<string, HierarchyCsvRow>()
+  for (const row of rows) {
+    if (byCsvId.has(row.csvId)) {
+      throw new HttpError(400, `Identifiant CSV duplique: ${row.csvId}`)
+    }
+    byCsvId.set(row.csvId, row)
+  }
+
+  for (const row of rows) {
+    if (row.managerCsvId === row.csvId) {
+      throw new HttpError(400, `Ligne ${row.rowNumber}: une personne ne peut pas etre son propre superieur`)
+    }
+    if (row.managerCsvId && !byCsvId.has(row.managerCsvId)) {
+      throw new HttpError(400, `Ligne ${row.rowNumber}: superieur_id introuvable (${row.managerCsvId})`)
+    }
+
+    const seen = new Set<string>([row.csvId])
+    let cursor = row.managerCsvId
+    while (cursor) {
+      if (seen.has(cursor)) {
+        throw new HttpError(400, `Cycle hierarchique detecte autour de ${row.csvId}`)
+      }
+      seen.add(cursor)
+      cursor = byCsvId.get(cursor)?.managerCsvId ?? null
+    }
+  }
+
+  return rows
+}
+
+function employeeMatchKey(name: string) {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+}
+
+async function parseHierarchyImportRequest(request: Request, body: unknown) {
+  const contentType = request.headers.get("content-type") ?? ""
+  if (!contentType.includes("multipart/form-data")) {
+    return parseBody(hierarchyCsvInput, body).csv
+  }
+
+  const form = body && typeof body === "object" ? (body as Record<string, unknown>) : {}
+  const fileValue = form.file ?? form.csv
+  if (fileValue instanceof File) {
+    return fileValue.text()
+  }
+  if (typeof fileValue === "string" && fileValue.trim()) {
+    return fileValue
+  }
+
+  throw new HttpError(400, "Fichier CSV manquant")
+}
+
+async function importHierarchyCsv(companyId: string, csv: string) {
+  const rows = parseHierarchyCsv(csv)
+
+  return db.transaction(async (tx) => {
+    const existingEmployees = await tx.select().from(employees).where(eq(employees.companyId, companyId))
+    const byEmail = new Map(
+      existingEmployees
+        .filter((employee) => employee.email)
+        .map((employee) => [employee.email!.toLowerCase(), employee] as const),
+    )
+    const byUniqueName = new Map<string, (typeof employees.$inferSelect) | null>()
+
+    for (const employee of existingEmployees) {
+      const key = employeeMatchKey(employee.name)
+      byUniqueName.set(key, byUniqueName.has(key) ? null : employee)
+    }
+
+    const importedByCsvId = new Map<string, typeof employees.$inferSelect>()
+    let created = 0
+    let updated = 0
+
+    for (const row of rows) {
+      const existing = row.email ? byEmail.get(row.email) : byUniqueName.get(employeeMatchKey(row.name)) ?? null
+      const title = row.title ?? existing?.title ?? "Collaborateur"
+      const department = row.department ?? existing?.department ?? null
+      const jobDescription =
+        row.jobDescription ?? existing?.jobDescription ?? `Fiche de poste de ${row.name} a completer.`
+      const embedding = await embedText(`${title}\n${department ?? ""}\n${jobDescription}`)
+
+      if (existing) {
+        const [employee] = await tx
+          .update(employees)
+          .set({
+            name: row.name,
+            email: row.email ?? existing.email,
+            title,
+            department,
+            jobDescription,
+            jobEmbedding: embedding ?? existing.jobEmbedding,
+            status: "active",
+            updatedAt: new Date(),
+          })
+          .where(eq(employees.id, existing.id))
+          .returning()
+
+        importedByCsvId.set(row.csvId, employee!)
+        updated += 1
+      } else {
+        const [employee] = await tx
+          .insert(employees)
+          .values({
+            companyId,
+            name: row.name,
+            email: row.email,
+            title,
+            department,
+            jobDescription,
+            jobEmbedding: embedding,
+          })
+          .returning()
+
+        importedByCsvId.set(row.csvId, employee!)
+        created += 1
+      }
+    }
+
+    let linked = 0
+    let roots = 0
+    const importedEmployees = []
+
+    for (const row of rows) {
+      const employee = importedByCsvId.get(row.csvId)
+      if (!employee) {
+        throw new HttpError(500, `Employe importe introuvable: ${row.csvId}`)
+      }
+
+      const managerId = row.managerCsvId ? importedByCsvId.get(row.managerCsvId)?.id ?? null : null
+      if (managerId) {
+        linked += 1
+      } else {
+        roots += 1
+      }
+
+      const [updatedEmployee] = await tx
+        .update(employees)
+        .set({ managerId, updatedAt: new Date() })
+        .where(eq(employees.id, employee.id))
+        .returning()
+
+      importedEmployees.push(serializeEmployee(updatedEmployee!))
+    }
+
+    return {
+      created,
+      updated,
+      linked,
+      roots,
+      employees: importedEmployees,
+    }
+  })
 }
 
 function slugifyCompanyName(value: string) {
@@ -878,6 +1221,16 @@ export const app = new Elysia()
       }
 
       return serializeEmployee(employee)
+    } catch (error) {
+      return jsonError(error)
+    }
+  })
+  .post("/api/companies/:companyId/hierarchy/import", async ({ request, params, body }) => {
+    try {
+      const companyId = param(params.companyId)
+      await requireAdminOrSuperAdmin(request, companyId)
+      const csv = await parseHierarchyImportRequest(request, body)
+      return await importHierarchyCsv(companyId, csv)
     } catch (error) {
       return jsonError(error)
     }

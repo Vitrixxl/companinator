@@ -76,6 +76,26 @@ export async function requireAdmin(request: Request, companyId: string) {
   return context
 }
 
+export async function requireAdminOrSuperAdmin(request: Request, companyId: string) {
+  const session = await requireSession(request)
+
+  if (isSuperAdminEmail(session.user.email)) {
+    return { session, membership: null }
+  }
+
+  const [membership] = await db
+    .select()
+    .from(companyMemberships)
+    .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.userId, session.user.id)))
+    .limit(1)
+
+  if (!membership || (membership.role !== "owner" && membership.role !== "admin")) {
+    throw new HttpError(403, "Droits admin requis")
+  }
+
+  return { session, membership }
+}
+
 export async function requireOwner(request: Request, companyId: string) {
   const context = await requireMembership(request, companyId)
 

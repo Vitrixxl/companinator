@@ -120,3 +120,11 @@ export interface AssistantResponseDTO {
   candidates: AssistantCandidateDTO[]
   ollamaAvailable: boolean
 }
+
+export interface HierarchyImportResultDTO {
+  created: number
+  updated: number
+  linked: number
+  roots: number
+  employees: EmployeeDTO[]
+}

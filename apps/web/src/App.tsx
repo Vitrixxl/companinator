@@ -8,7 +8,6 @@ import {
   Bookmark,
   Building2,
   CalendarPlus,
-  CalendarClock,
   ChevronRight,
   ChevronsRight,
   FileText,
@@ -34,11 +33,9 @@ import {
   Sigma,
   Sparkles,
   Sun,
-  Tag,
   Users,
   Upload,
   X,
-  Zap,
 } from "lucide-react"
 import { QueryClient, QueryClientProvider, useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
@@ -96,6 +93,7 @@ import {
   getMessages,
   getPosts,
   getSuperAdminCompanies,
+  importHierarchyCsv,
   sendMessage,
   signIn,
   signOut,
@@ -905,12 +903,27 @@ function buildFlow(nodes: EmployeeDTO[], edges: Edge[]): EmployeeFlowNode[] {
 
 function HierarchyPage({
   companyId,
+  canImportHierarchy,
   onSelectEmployee,
 }: {
   companyId: string
+  canImportHierarchy: boolean
   onSelectEmployee: (employee: EmployeeDTO) => void
 }) {
+  const client = useQueryClient()
+  const importInputRef = useRef<HTMLInputElement | null>(null)
+  const [importSummary, setImportSummary] = useState<string | null>(null)
   const hierarchy = useQuery({ queryKey: ["hierarchy", companyId], queryFn: () => getHierarchy(companyId) })
+  const importMutation = useMutation({
+    mutationFn: (file: File) => importHierarchyCsv(companyId, file),
+    onSuccess: (result) => {
+      setImportSummary(`${result.created} crees · ${result.updated} mis a jour · ${result.linked} liens`)
+      void client.invalidateQueries({ queryKey: ["hierarchy", companyId] })
+      void client.invalidateQueries({ queryKey: ["employees", companyId] })
+      void client.invalidateQueries({ queryKey: ["dashboard", companyId] })
+      void client.invalidateQueries({ queryKey: ["super-admin-companies"] })
+    },
+  })
   const hierarchyEmployees = useMemo(
     () => (hierarchy.data?.nodes ?? []).map((node) => node.employee),
     [hierarchy.data?.nodes],
@@ -977,6 +990,48 @@ function HierarchyPage({
             </div>
           </div>
           <div className="flex min-w-0 flex-wrap items-center gap-3">
+            {canImportHierarchy ? (
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <input
+                  ref={importInputRef}
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  onChange={(event) => {
+                    const file = event.target.files?.[0]
+                    event.target.value = ""
+                    if (!file) {
+                      return
+                    }
+                    setImportSummary(null)
+                    importMutation.mutate(file)
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={importMutation.isPending}
+                  onClick={() => importInputRef.current?.click()}
+                >
+                  <Upload />
+                  {importMutation.isPending ? "Import..." : "Importer CSV"}
+                </Button>
+                <Button type="button" size="xs" variant="ghost" asChild>
+                  <a href="/examples/hierarchy-import.csv" download>
+                    <FileText />
+                    Exemple
+                  </a>
+                </Button>
+                {importMutation.error ? (
+                  <span className="max-w-[18rem] truncate text-xs text-destructive">{importMutation.error.message}</span>
+                ) : importSummary ? (
+                  <span className="max-w-[18rem] truncate font-mono text-[10px] uppercase tracking-wider text-primary">
+                    {importSummary}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
             <div className="hidden items-center gap-3 text-right sm:flex">
               <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
                 {hierarchyEmployees.length} employes
@@ -1350,6 +1405,65 @@ function assistantMessageId(role: AssistantChatMessage["role"]) {
   return `${role}-${Date.now()}-${Math.random().toString(36).slice(2)}`
 }
 
+function AssistantCandidateCard({
+  candidate,
+  availabilityChecked,
+  onSelectEmployee,
+}: {
+  candidate: AssistantResponseDTO["candidates"][number]
+  index: number
+  availabilityChecked: boolean
+  onSelectEmployee: (employee: EmployeeDTO) => void
+}) {
+  const tone = departmentTone(candidate.employee.department)
+
+  return (
+    <button
+      style={{ "--dept-edge": tone.edge } as CSSProperties}
+      className={cn(
+        "employee-flow-card group relative w-full overflow-hidden rounded-2xl border border-border/80 bg-card/95 text-left text-card-foreground shadow-sm ring-1 ring-foreground/8 backdrop-blur transition duration-150",
+        "hover:shadow-lg",
+      )}
+      onClick={() => onSelectEmployee(candidate.employee)}
+      type="button"
+    >
+      <div className="grid gap-2 px-4 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <span className="eyebrow-tight">
+            <span className={cn("inline-block size-1.5 -translate-y-px rounded-full align-middle", tone.dot)} />{" "}
+            {tone.label}
+          </span>
+          <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground">
+            {availabilityChecked ? (candidate.available ? "Disponible" : "Occupe") : "IC"}
+          </span>
+        </div>
+        <div className="flex items-start gap-3">
+          <div
+            className={cn(
+              "grid size-10 shrink-0 place-items-center rounded-xl text-xs font-semibold ring-1",
+              tone.avatar,
+            )}
+          >
+            {initials(candidate.employee.name)}
+          </div>
+          <div className="min-w-0 flex-1">
+            <strong className="block truncate font-heading text-sm leading-tight font-medium">
+              {candidate.employee.name}
+            </strong>
+            <p className="truncate text-xs text-muted-foreground">{candidate.employee.title}</p>
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-3 border-t pt-2 text-[11px] text-muted-foreground">
+          <span className="font-mono uppercase tracking-wider">
+            @{candidate.handle || employeeHandle(candidate.employee)}
+          </span>
+          <span className="truncate">{candidate.reason}</span>
+        </div>
+      </div>
+    </button>
+  )
+}
+
 function AssistantChatBubble({
   message,
   onSelectEmployee,
@@ -1400,21 +1514,6 @@ function AssistantChatBubble({
 
         {message.answer ? (
           <div className="grid gap-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Badge variant="outline" className="rounded-md bg-background/70 font-mono">
-                <Tag className="size-3" /> {message.answer.interpretedRole ?? "role libre"}
-              </Badge>
-              <Badge variant="outline" className="rounded-md bg-background/70 font-mono">
-                <CalendarClock className="size-3" /> {message.answer.interpretedDate ?? "date non precisee"}
-              </Badge>
-              <Badge
-                variant={message.answer.ollamaAvailable ? "default" : "destructive"}
-                className="rounded-md font-mono"
-              >
-                <Zap className="size-3" />
-                {message.answer.ollamaAvailable ? "IA active" : "IA inactive"}
-              </Badge>
-            </div>
             <AssistantAnswer
               answer={message.answer}
               content={visibleAnswer}
@@ -1422,9 +1521,14 @@ function AssistantChatBubble({
               onSelectEmployee={onSelectEmployee}
             />
           </div>
-        ) : (
+        ) : message.content ? (
           <p className="text-sm leading-relaxed">{message.content}</p>
-        )}
+        ) : message.isStreaming ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <ScanSearch className="size-4 animate-pulse" />
+            Analyse des profils et disponibilites...
+          </div>
+        ) : null}
       </div>
     </article>
   )
@@ -1448,54 +1552,53 @@ function AssistantPage({
     },
   ])
   const chatEndRef = useRef<HTMLDivElement | null>(null)
-  const mutation = useMutation<AssistantResponseDTO, Error, string>({
-    mutationFn: (prompt) => askAssistant(companyId, prompt),
-    onSuccess: (response) => {
-      setMessages((current) => [
-        ...current,
-        {
-          id: assistantMessageId("assistant"),
-          role: "assistant",
-          content: response.answer,
-          answer: response,
-          createdAt: new Date(),
-        },
-      ])
-    },
-    onError: (error) => {
-      setMessages((current) => [
-        ...current,
-        {
-          id: assistantMessageId("assistant"),
-          role: "assistant",
-          content: `Je n'ai pas pu traiter la requete : ${error.message}`,
-          createdAt: new Date(),
-          isError: true,
-        },
-      ])
-    },
-  })
-  const latestAnswer = useMemo(() => {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index]
-      if (message?.answer) {
-        return message.answer
+  const [isSending, setIsSending] = useState(false)
+  const isAssistantStreaming = messages.some((message) => message.isStreaming)
+  const isBusy = isSending || isAssistantStreaming
+  const userMessageCount = messages.filter((message) => message.role === "user").length
+  const citedProfiles = useMemo(() => {
+    const seen = new Set<string>()
+    const profiles: Array<{
+      candidate: AssistantResponseDTO["candidates"][number]
+      availabilityChecked: boolean
+    }> = []
+
+    for (const message of messages) {
+      if (!message.answer) {
+        continue
+      }
+
+      const visibleContent = (message.streamedContent ?? message.content).toLowerCase()
+      for (const candidate of message.answer.candidates) {
+        const handle = `@${candidate.handle || employeeHandle(candidate.employee)}`.toLowerCase()
+        const name = candidate.employee.name.toLowerCase()
+
+        if (!seen.has(candidate.employee.id) && (visibleContent.includes(handle) || visibleContent.includes(name))) {
+          seen.add(candidate.employee.id)
+          profiles.push({
+            candidate,
+            availabilityChecked: Boolean(message.answer.interpretedDate),
+          })
+        }
       }
     }
-    return null
+
+    return profiles
   }, [messages])
-  const bestCandidate = latestAnswer?.candidates[0] ?? null
-  const userMessageCount = messages.filter((message) => message.role === "user").length
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
-  }, [messages, mutation.isPending])
+  }, [messages, isSending])
 
-  const submitMessage = (rawPrompt: string) => {
+  const submitMessage = async (rawPrompt: string) => {
     const prompt = rawPrompt.trim()
-    if (!prompt || mutation.isPending) {
+    if (!prompt || isBusy) {
       return
     }
+
+    const assistantId = assistantMessageId("assistant")
+    let metadata: AssistantStreamMetadata | null = null
+    let streamedAnswer = ""
 
     setMessages((current) => [
       ...current,
@@ -1505,30 +1608,113 @@ function AssistantPage({
         content: prompt,
         createdAt: new Date(),
       },
+      {
+        id: assistantId,
+        role: "assistant",
+        content: "",
+        streamedContent: "",
+        createdAt: new Date(),
+        isStreaming: true,
+      },
     ])
     setQuery("")
-    mutation.mutate(prompt)
+    setIsSending(true)
+
+    try {
+      await streamAssistant(companyId, prompt, {
+        onMetadata: (nextMetadata) => {
+          metadata = nextMetadata
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantId
+                ? {
+                    ...message,
+                    answer: { answer: streamedAnswer, ...nextMetadata },
+                  }
+                : message,
+            ),
+          )
+        },
+        onDelta: (delta) => {
+          streamedAnswer += delta
+          setMessages((current) =>
+            current.map((message) => {
+              if (message.id !== assistantId) {
+                return message
+              }
+
+              const answer = metadata
+                ? { answer: streamedAnswer, ...metadata }
+                : message.answer
+                  ? { ...message.answer, answer: streamedAnswer }
+                  : undefined
+
+              return {
+                ...message,
+                content: streamedAnswer,
+                streamedContent: streamedAnswer,
+                answer,
+              }
+            }),
+          )
+        },
+        onDone: (answer) => {
+          streamedAnswer = answer || streamedAnswer
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === assistantId
+                ? {
+                    ...message,
+                    content: streamedAnswer,
+                    streamedContent: streamedAnswer,
+                    isStreaming: false,
+                    answer: metadata ? { answer: streamedAnswer, ...metadata } : message.answer,
+                  }
+                : message,
+            ),
+          )
+        },
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Erreur pendant la generation de la reponse."
+      setMessages((current) =>
+        current.map((row) =>
+          row.id === assistantId
+            ? {
+                id: assistantId,
+                role: "assistant",
+                content: `Je n'ai pas pu traiter la requete : ${message}`,
+                createdAt: new Date(),
+                isError: true,
+              }
+            : row,
+        ),
+      )
+    } finally {
+      setIsSending(false)
+      setMessages((current) =>
+        current.map((message) =>
+          message.id === assistantId && message.isStreaming
+            ? {
+                ...message,
+                isStreaming: false,
+                streamedContent: message.streamedContent ?? message.content,
+              }
+            : message,
+        ),
+      )
+    }
   }
 
   return (
-    <div className="editorial-enter grid gap-6">
-      <PageOpener
-        marker="04"
-        eyebrow="Chatbot · IA semantique"
-        title="Assistant conversationnel."
-        description="Un chatbot interne pour formuler un besoin en langage naturel, retrouver les profils pertinents et verifier leur disponibilite."
-        meta={
-          <div className="flex items-center gap-3">
-            <Badge variant="outline" className="rounded-md font-mono">
-              <Sparkles className="size-3" /> LLM local
-            </Badge>
-            <Badge variant="outline" className="rounded-md font-mono">embeddinggemma</Badge>
-          </div>
-        }
-      />
-
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="panel grid h-[calc(100svh-21rem)] min-h-[620px] grid-rows-[auto_1fr_auto] overflow-hidden">
+    <div className="editorial-enter grid h-full min-h-0">
+      <div
+        className={cn(
+          "grid min-h-0 gap-4",
+          citedProfiles.length > 0 ? "xl:grid-cols-[minmax(0,1fr)_340px]" : "xl:grid-cols-1",
+        )}
+      >
+        <section className="panel grid min-h-0 grid-rows-[auto_1fr_auto] overflow-hidden">
           <header className="flex flex-wrap items-center justify-between gap-4 border-b bg-card/90 px-5 py-4 backdrop-blur">
             <div className="flex min-w-0 items-center gap-3">
               <div className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary">
@@ -1543,8 +1729,8 @@ function AssistantPage({
               <Badge variant="outline" className="rounded-md font-mono">
                 {String(userMessageCount).padStart(2, "0")} demandes
               </Badge>
-              <Badge variant={mutation.isPending ? "secondary" : "outline"} className="rounded-md font-mono">
-                {mutation.isPending ? "Analyse" : "Pret"}
+              <Badge variant={isBusy ? "secondary" : "outline"} className="rounded-md font-mono">
+                {isAssistantStreaming ? "Generation" : isSending ? "Analyse" : "Pret"}
               </Badge>
             </div>
           </header>
@@ -1558,38 +1744,24 @@ function AssistantPage({
                   onSelectEmployee={onSelectEmployee}
                 />
               ))}
-              {mutation.isPending ? (
-                <article className="flex gap-3">
-                  <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
-                    <Sparkles className="size-4" />
-                  </div>
-                  <div className="grid gap-2 rounded-2xl border bg-card px-4 py-3">
-                    <span className="eyebrow-tight">Assistant</span>
-                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <ScanSearch className="size-4 animate-pulse" />
-                      Analyse des profils et disponibilites...
-                    </div>
-                  </div>
-                </article>
-              ) : null}
               <div ref={chatEndRef} />
             </div>
           </ScrollArea>
 
           <div className="border-t bg-muted/20 p-4">
-            <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
+            <div className="mb-3 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
               {ASSISTANT_EXAMPLES.map((example, index) => (
                 <button
                   key={example}
                   type="button"
-                  disabled={mutation.isPending}
-                  onClick={() => submitMessage(example)}
-                  className="group/example inline-flex shrink-0 items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-xs transition hover:border-primary/40 hover:bg-background disabled:pointer-events-none disabled:opacity-50"
+                  disabled={isBusy}
+                  onClick={() => void submitMessage(example)}
+                  className="group/example grid min-h-24 grid-cols-[auto_1fr_auto] items-center gap-3 rounded-lg border bg-card px-4 py-3 text-left text-sm transition hover:border-primary/40 hover:bg-background disabled:pointer-events-none disabled:opacity-50"
                 >
                   <span className="font-mono text-[10px] text-muted-foreground tabular">
                     {String(index + 1).padStart(2, "0")}
                   </span>
-                  <span>{example}</span>
+                  <span className="line-clamp-2 font-medium leading-snug md:text-base">{example}</span>
                   <ChevronsRight className="size-3.5 text-muted-foreground transition group-hover/example:translate-x-0.5 group-hover/example:text-primary" />
                 </button>
               ))}
@@ -1598,7 +1770,7 @@ function AssistantPage({
               className="flex items-end gap-2"
               onSubmit={(event) => {
                 event.preventDefault()
-                submitMessage(query)
+                void submitMessage(query)
               }}
             >
               <Textarea
@@ -1607,16 +1779,16 @@ function AssistantPage({
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault()
-                    submitMessage(query)
+                    void submitMessage(query)
                   }
                 }}
                 placeholder="Ex: Trouve un product manager disponible jeudi apres-midi"
-                className="max-h-40 min-h-16 resize-none bg-background text-sm leading-relaxed"
+                className="max-h-28 min-h-14 resize-none bg-background text-sm leading-relaxed"
               />
               <Button
                 type="submit"
                 size="icon-lg"
-                disabled={!query.trim() || mutation.isPending}
+                disabled={!query.trim() || isBusy}
                 aria-label="Envoyer"
               >
                 <Send />
@@ -1625,77 +1797,29 @@ function AssistantPage({
           </div>
         </section>
 
-        <aside className="grid gap-4 xl:content-start">
-          <section className="panel grid gap-4 p-5">
-            <div className="flex items-center justify-between gap-3">
-              <span className="eyebrow">Contexte</span>
+        {citedProfiles.length > 0 ? (
+          <aside className="panel grid min-h-0 grid-rows-[auto_1fr] overflow-hidden">
+            <header className="flex items-center justify-between gap-3 border-b px-4 py-3">
+              <span className="eyebrow">Profils recommandes</span>
               <Badge variant="outline" className="rounded-md font-mono">
-                pgvector
+                {String(citedProfiles.length).padStart(2, "0")}
               </Badge>
+            </header>
+            <ScrollArea className="editorial-scroll min-h-0 p-3">
+              <div className="grid gap-3">
+                {citedProfiles.map((profile, index) => (
+                  <AssistantCandidateCard
+                    key={profile.candidate.employee.id}
+                    availabilityChecked={profile.availabilityChecked}
+                    candidate={profile.candidate}
+                    index={index}
+                    onSelectEmployee={onSelectEmployee}
+                  />
+                ))}
             </div>
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="rounded-lg border bg-muted/20 p-3">
-                <span className="eyebrow-tight">Role</span>
-                <p className="mt-1 truncate font-medium">{latestAnswer?.interpretedRole ?? "Non defini"}</p>
-              </div>
-              <div className="rounded-lg border bg-muted/20 p-3">
-                <span className="eyebrow-tight">Date</span>
-                <p className="mt-1 truncate font-medium">{latestAnswer?.interpretedDate ?? "Libre"}</p>
-              </div>
-              <div className="rounded-lg border bg-muted/20 p-3">
-                <span className="eyebrow-tight">Resultats</span>
-                <p className="mt-1 font-heading text-xl tabular">{latestAnswer?.candidates.length ?? 0}</p>
-              </div>
-              <div className="rounded-lg border bg-muted/20 p-3">
-                <span className="eyebrow-tight">Moteur</span>
-                <p className="mt-1 font-medium">{latestAnswer?.ollamaAvailable === false ? "Fallback" : "Local"}</p>
-              </div>
-            </div>
-          </section>
-
-          <section className="panel grid gap-4 p-5">
-            <span className="eyebrow">Profil recommande</span>
-            {bestCandidate ? (
-              <button
-                type="button"
-                onClick={() => onSelectEmployee(bestCandidate.employee)}
-                className="grid gap-3 rounded-lg border bg-card p-4 text-left transition hover:bg-muted/30"
-              >
-                <div className="flex items-start gap-3">
-                  <div
-                    className={cn(
-                      "grid size-11 shrink-0 place-items-center rounded-md text-sm font-semibold ring-1",
-                      departmentTone(bestCandidate.employee.department).avatar,
-                    )}
-                  >
-                    {initials(bestCandidate.employee.name)}
-                  </div>
-                  <div className="min-w-0">
-                    <strong className="block truncate font-heading text-base font-medium">
-                      {bestCandidate.employee.name}
-                    </strong>
-                    <p className="truncate text-xs text-muted-foreground">{bestCandidate.employee.title}</p>
-                  </div>
-                </div>
-                <p className="line-clamp-3 border-t pt-3 text-xs leading-relaxed text-muted-foreground">
-                  {bestCandidate.reason}
-                </p>
-              </button>
-            ) : (
-              <div className="hatch grid place-items-center rounded-lg py-10 text-center text-xs text-muted-foreground">
-                Aucun profil selectionne
-              </div>
-            )}
-          </section>
-
-          <section className="panel grid gap-3 p-5">
-            <span className="eyebrow">Modele</span>
-            <p className="text-sm leading-relaxed text-muted-foreground">
-              La conversation reste dans cette session. Chaque message interroge l'assistant semantique avec la
-              derniere demande envoyee.
-            </p>
-          </section>
-        </aside>
+            </ScrollArea>
+          </aside>
+        ) : null}
       </div>
     </div>
   )
@@ -2295,6 +2419,7 @@ function SuperAdminPage({
   const [ownerEmail, setOwnerEmail] = useState(currentUserEmail)
   const [ownerTitle, setOwnerTitle] = useState("Owner")
   const [ownerPassword, setOwnerPassword] = useState("Companinator123!")
+  const [companyImportSummaries, setCompanyImportSummaries] = useState<Record<string, string>>({})
 
   const companyRows = companies.data ?? []
   const totals = companyRows.reduce(
@@ -2326,6 +2451,19 @@ function SuperAdminPage({
       setSlug("")
       setSlugEdited(false)
       setAdminCanReadConversations(false)
+    },
+  })
+  const importMutation = useMutation({
+    mutationFn: ({ companyId, file }: { companyId: string; file: File }) => importHierarchyCsv(companyId, file),
+    onSuccess: (result, variables) => {
+      setCompanyImportSummaries((current) => ({
+        ...current,
+        [variables.companyId]: `${result.created} crees · ${result.updated} mis a jour · ${result.linked} liens`,
+      }))
+      void client.invalidateQueries({ queryKey: ["super-admin-companies"] })
+      void client.invalidateQueries({ queryKey: ["hierarchy", variables.companyId] })
+      void client.invalidateQueries({ queryKey: ["employees", variables.companyId] })
+      void client.invalidateQueries({ queryKey: ["dashboard", variables.companyId] })
     },
   })
 
@@ -2497,9 +2635,21 @@ function SuperAdminPage({
               {String(companyRows.length).padStart(2, "0")} entreprises
             </span>
           </div>
+          {importMutation.error ? (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              {importMutation.error.message}
+            </div>
+          ) : null}
           <div className="grid gap-3">
             {companyRows.map((company) => (
-              <SystemCompanyCard key={company.id} company={company} onOpenCompany={onOpenCompany} />
+              <SystemCompanyCard
+                key={company.id}
+                company={company}
+                importing={importMutation.isPending && importMutation.variables?.companyId === company.id}
+                importSummary={companyImportSummaries[company.id] ?? null}
+                onImportHierarchy={(file) => importMutation.mutate({ companyId: company.id, file })}
+                onOpenCompany={onOpenCompany}
+              />
             ))}
             {!companies.isLoading && companyRows.length === 0 ? (
               <div className="hatch grid place-items-center rounded-xl py-12 text-xs text-muted-foreground">
@@ -2537,11 +2687,19 @@ function AdminMetric({
 
 function SystemCompanyCard({
   company,
+  importing,
+  importSummary,
+  onImportHierarchy,
   onOpenCompany,
 }: {
   company: SystemCompanyDTO
+  importing: boolean
+  importSummary: string | null
+  onImportHierarchy: (file: File) => void
   onOpenCompany: (companyId: string) => void
 }) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+
   return (
     <div className="panel grid gap-4 p-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -2561,16 +2719,35 @@ function SystemCompanyCard({
             </p>
           </div>
         </div>
-        {company.currentUserRole ? (
-          <Button variant="outline" size="sm" onClick={() => onOpenCompany(company.id)}>
-            <ArrowUpRight />
-            Ouvrir
+        <div className="flex flex-wrap justify-end gap-2">
+          <input
+            ref={inputRef}
+            type="file"
+            accept=".csv,text/csv"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              event.target.value = ""
+              if (file) {
+                onImportHierarchy(file)
+              }
+            }}
+          />
+          <Button variant="outline" size="sm" disabled={importing} onClick={() => inputRef.current?.click()}>
+            <Upload />
+            {importing ? "Import..." : "CSV"}
           </Button>
-        ) : (
-          <Badge variant="outline" className="rounded-md font-mono text-muted-foreground">
-            Hors espace
-          </Badge>
-        )}
+          {company.currentUserRole ? (
+            <Button variant="outline" size="sm" onClick={() => onOpenCompany(company.id)}>
+              <ArrowUpRight />
+              Ouvrir
+            </Button>
+          ) : (
+            <Badge variant="outline" className="rounded-md font-mono text-muted-foreground">
+              Hors espace
+            </Badge>
+          )}
+        </div>
       </div>
 
       <div className="grid gap-2 sm:grid-cols-3">
@@ -2602,6 +2779,9 @@ function SystemCompanyCard({
             {owner.email}
           </Badge>
         ))}
+        {importSummary ? (
+          <span className="font-mono text-[10px] uppercase tracking-wider text-primary">{importSummary}</span>
+        ) : null}
       </div>
     </div>
   )
@@ -3244,6 +3424,7 @@ function AppShell() {
           className={cn(
             "px-4 py-6 lg:px-10 lg:py-8",
             section === "hierarchy" && "px-3 py-3 lg:px-5 lg:py-4",
+            section === "assistant" && "h-[calc(100svh-8.5rem)] overflow-hidden px-4 py-3 lg:h-[calc(100svh-6.5rem)] lg:px-8 lg:py-4",
           )}
         >
           {section === "dashboard" && companyId && membership ? (
@@ -3256,7 +3437,11 @@ function AppShell() {
             />
           ) : null}
           {section === "hierarchy" && companyId ? (
-            <HierarchyPage companyId={companyId} onSelectEmployee={setSelectedEmployee} />
+            <HierarchyPage
+              companyId={companyId}
+              canImportHierarchy={isAdmin || isSystemAdmin}
+              onSelectEmployee={setSelectedEmployee}
+            />
           ) : null}
           {section === "employees" && companyId ? (
             <EmployeesPage companyId={companyId} employees={employees} onSelectEmployee={setSelectedEmployee} />
@@ -3291,7 +3476,7 @@ function AppShell() {
           ) : null}
         </div>
 
-        {section !== "hierarchy" ? (
+        {section !== "hierarchy" && section !== "assistant" ? (
         <footer className="border-t bg-card/60 px-4 py-4 lg:px-10">
           <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
             <div className="flex items-center gap-3">

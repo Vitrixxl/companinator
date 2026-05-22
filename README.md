@@ -41,6 +41,14 @@ Le seed cree `Acme France` avec 20 employes, 14 evenements, 5 groupes, 5 posts c
 
 `admin@acme.local` est aussi super admin plateforme via `SUPER_ADMIN_EMAILS`. Cette allowlist donne acces a l'onglet `Gros Admin` pour creer et piloter les entreprises.
 
+## Import Hierarchie CSV
+
+Les owners, admins et super admins peuvent importer un organigramme depuis l'onglet `Hierarchie`.
+Le fichier d'exemple est disponible dans `apps/web/public/examples/hierarchy-import.csv`.
+
+Colonnes supportees: `id`, `superieur_id`, `nom`, `email`, `poste`, `departement`, `description_de_poste`.
+`superieur_id` peut etre vide pour la racine. L'id CSV sert uniquement pendant l'import pour relier les personnes; il n'est pas stocke en base.
+
 ## Stockage Local
 
 Les images de l'onglet communaute sont stockees localement dans `apps/api/storage/community` et servies par l'API via `/api/uploads/community/:fileName`.
