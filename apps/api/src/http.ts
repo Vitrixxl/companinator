@@ -66,6 +66,26 @@ export async function requireMembership(request: Request, companyId: string) {
   return { session, membership }
 }
 
+export async function requireMembershipOrSuperAdmin(request: Request, companyId: string) {
+  const session = await requireSession(request)
+
+  if (isSuperAdminEmail(session.user.email)) {
+    return { session, membership: null }
+  }
+
+  const [membership] = await db
+    .select()
+    .from(companyMemberships)
+    .where(and(eq(companyMemberships.companyId, companyId), eq(companyMemberships.userId, session.user.id)))
+    .limit(1)
+
+  if (!membership) {
+    throw new HttpError(403, "Acces entreprise refuse")
+  }
+
+  return { session, membership }
+}
+
 export async function requireAdmin(request: Request, companyId: string) {
   const context = await requireMembership(request, companyId)
 

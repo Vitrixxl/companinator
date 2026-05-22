@@ -34,6 +34,7 @@ import {
   requireAdmin,
   requireAdminOrSuperAdmin,
   requireMembership,
+  requireMembershipOrSuperAdmin,
   requireOwner,
   requireSession,
   requireSuperAdmin,
@@ -1084,7 +1085,7 @@ export const app = new Elysia()
   .get("/api/companies/:companyId/dashboard", async ({ request, params }) => {
     try {
       const companyId = param(params.companyId)
-      await requireMembership(request, companyId)
+      await requireMembershipOrSuperAdmin(request, companyId)
 
       const [employeeCount] = await db
         .select({ count: sql<number>`count(*)::int` })
@@ -1116,7 +1117,7 @@ export const app = new Elysia()
   .get("/api/companies/:companyId/employees", async ({ request, params, query }) => {
     try {
       const companyId = param(params.companyId)
-      await requireMembership(request, companyId)
+      await requireMembershipOrSuperAdmin(request, companyId)
       const q = String(query.q ?? "").trim()
       const conditions = [eq(employees.companyId, companyId)]
 
@@ -1145,7 +1146,7 @@ export const app = new Elysia()
   .post("/api/companies/:companyId/employees", async ({ request, params, body }) => {
     try {
       const companyId = param(params.companyId)
-      const { session } = await requireAdmin(request, companyId)
+      const { session } = await requireAdminOrSuperAdmin(request, companyId)
       const input = parseBody(employeeInput, body)
 
       if (input.managerId) {
@@ -1194,7 +1195,7 @@ export const app = new Elysia()
     try {
       const companyId = param(params.companyId)
       const employeeId = param(params.employeeId)
-      await requireAdmin(request, companyId)
+      await requireAdminOrSuperAdmin(request, companyId)
       const input = parseBody(employeeInput.partial(), body)
 
       await assertNoManagerCycle(companyId, employeeId, input.managerId)
@@ -1238,7 +1239,7 @@ export const app = new Elysia()
   .get("/api/companies/:companyId/hierarchy", async ({ request, params }) => {
     try {
       const companyId = param(params.companyId)
-      await requireMembership(request, companyId)
+      await requireMembershipOrSuperAdmin(request, companyId)
 
       const rows = await db
         .select()
@@ -1264,7 +1265,7 @@ export const app = new Elysia()
     try {
       const companyId = param(params.companyId)
       const employeeId = param(params.employeeId)
-      await requireMembership(request, companyId)
+      await requireMembershipOrSuperAdmin(request, companyId)
       const rows = await db
         .select()
         .from(employeeEvents)
@@ -1280,7 +1281,7 @@ export const app = new Elysia()
     try {
       const companyId = param(params.companyId)
       const employeeId = param(params.employeeId)
-      const { session } = await requireMembership(request, companyId)
+      const { session } = await requireMembershipOrSuperAdmin(request, companyId)
       const input = parseBody(eventInput, body)
       const startsAt = new Date(input.startsAt)
       const endsAt = new Date(input.endsAt)

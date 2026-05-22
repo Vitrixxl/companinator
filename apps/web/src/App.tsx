@@ -2406,7 +2406,7 @@ function SuperAdminPage({
 }: {
   currentUserName: string
   currentUserEmail: string
-  onOpenCompany: (companyId: string) => void
+  onOpenCompany: (companyId: string, companyName?: string) => void
 }) {
   const client = useQueryClient()
   const companies = useQuery({ queryKey: ["super-admin-companies"], queryFn: getSuperAdminCompanies })
@@ -2444,13 +2444,14 @@ function SuperAdminPage({
         ownerTitle,
         ownerPassword: ownerPassword || undefined,
       }),
-    onSuccess: () => {
+    onSuccess: (company) => {
       void client.invalidateQueries({ queryKey: ["super-admin-companies"] })
       void client.invalidateQueries({ queryKey: ["me"] })
       setName("")
       setSlug("")
       setSlugEdited(false)
       setAdminCanReadConversations(false)
+      onOpenCompany(company.id, company.name)
     },
   })
   const importMutation = useMutation({
@@ -2696,7 +2697,7 @@ function SystemCompanyCard({
   importing: boolean
   importSummary: string | null
   onImportHierarchy: (file: File) => void
-  onOpenCompany: (companyId: string) => void
+  onOpenCompany: (companyId: string, companyName?: string) => void
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -2737,16 +2738,10 @@ function SystemCompanyCard({
             <Upload />
             {importing ? "Import..." : "CSV"}
           </Button>
-          {company.currentUserRole ? (
-            <Button variant="outline" size="sm" onClick={() => onOpenCompany(company.id)}>
-              <ArrowUpRight />
-              Ouvrir
-            </Button>
-          ) : (
-            <Badge variant="outline" className="rounded-md font-mono text-muted-foreground">
-              Hors espace
-            </Badge>
-          )}
+          <Button variant="outline" size="sm" onClick={() => onOpenCompany(company.id, company.name)}>
+            <ArrowUpRight />
+            Ouvrir
+          </Button>
         </div>
       </div>
 
@@ -3123,14 +3118,28 @@ function AppShell() {
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeDTO | null>(null)
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
+  const [selectedCompanyName, setSelectedCompanyName] = useState<string | null>(null)
   const isSystemAdmin = Boolean(me.data?.isSystemAdmin)
   const companyId = selectedCompanyId ?? me.data?.activeCompanyId ?? null
   const membership = me.data?.memberships.find((item) => item.companyId === companyId) ?? null
-  const hasWorkspace = Boolean(companyId && membership)
+  const hasWorkspace = Boolean(companyId && (membership || isSystemAdmin))
+  const isSystemCompanyContext = Boolean(companyId && isSystemAdmin && !membership)
   const isAdmin = membership?.role === "owner" || membership?.role === "admin"
   const visibleSections = useMemo(
-    () => sections.filter((item) => (item.id === "superAdmin" ? isSystemAdmin : hasWorkspace)),
-    [hasWorkspace, isSystemAdmin],
+    () =>
+      sections.filter((item) => {
+        if (item.id === "superAdmin") {
+          return isSystemAdmin
+        }
+        if (!hasWorkspace) {
+          return false
+        }
+        if (isSystemCompanyContext) {
+          return item.id === "dashboard" || item.id === "hierarchy" || item.id === "employees"
+        }
+        return true
+      }),
+    [hasWorkspace, isSystemAdmin, isSystemCompanyContext],
   )
   const visibleNavGrouped = useMemo(
     () =>
@@ -3144,18 +3153,18 @@ function AppShell() {
   const employeesQuery = useQuery({
     queryKey: ["employees", companyId],
     queryFn: () => getEmployees(companyId!),
-    enabled: Boolean(companyId),
+    enabled: Boolean(companyId && (membership || isSystemAdmin)),
   })
   const employees = employeesQuery.data ?? []
   const conversationsQuery = useQuery({
     queryKey: ["conversations", companyId],
     queryFn: () => getConversations(companyId!),
-    enabled: Boolean(companyId),
+    enabled: Boolean(companyId && membership),
   })
   const postsQuery = useQuery({
     queryKey: ["posts", companyId],
     queryFn: () => getPosts(companyId!),
-    enabled: Boolean(companyId),
+    enabled: Boolean(companyId && membership),
   })
   const now = useClock()
 
@@ -3171,6 +3180,9 @@ function AppShell() {
   async function openMessageWithEmployee(employee: EmployeeDTO) {
     if (!companyId) {
       throw new Error("Entreprise introuvable")
+    }
+    if (isSystemCompanyContext) {
+      throw new Error("Messagerie indisponible en mode super admin")
     }
 
     const meEmployeeId = me.data?.employee?.id
@@ -3209,9 +3221,10 @@ function AppShell() {
     setSelectedConversationId(null)
   }, [])
 
-  const openCompany = useCallback((companyIdToOpen: string) => {
+  const openCompany = useCallback((companyIdToOpen: string, companyNameToOpen?: string) => {
     setSelectedCompanyId(companyIdToOpen)
-    setSection("dashboard")
+    setSelectedCompanyName(companyNameToOpen ?? null)
+    setSection("hierarchy")
   }, [])
 
   if (me.isLoading) {
@@ -3241,8 +3254,8 @@ function AppShell() {
   }
 
   const activeSection = sectionCopy[!hasWorkspace && isSystemAdmin ? "superAdmin" : section]
-  const activeCompanyName = membership?.company.name ?? "Plateforme"
-  const activeRole = membership?.role ?? "system"
+  const activeCompanyName = membership?.company.name ?? selectedCompanyName ?? "Plateforme"
+  const activeRole = membership?.role ?? (companyId && isSystemAdmin ? "super admin" : "system")
 
   return (
     <div className="editorial-shell relative min-h-svh">
@@ -3427,13 +3440,13 @@ function AppShell() {
             section === "assistant" && "h-[calc(100svh-8.5rem)] overflow-hidden px-4 py-3 lg:h-[calc(100svh-6.5rem)] lg:px-8 lg:py-4",
           )}
         >
-          {section === "dashboard" && companyId && membership ? (
+          {section === "dashboard" && companyId && hasWorkspace ? (
             <DashboardPage
               companyId={companyId}
               employees={employees}
               posts={postsQuery.data ?? []}
               conversations={conversationsQuery.data ?? []}
-              companyName={membership.company.name}
+              companyName={activeCompanyName}
             />
           ) : null}
           {section === "hierarchy" && companyId ? (
@@ -3499,7 +3512,7 @@ function AppShell() {
         <EmployeeSheet
           companyId={companyId}
           employee={selectedEmployee}
-          meEmployeeId={me.data?.employee?.id ?? null}
+          meEmployeeId={isSystemCompanyContext ? null : me.data?.employee?.id ?? null}
           onMessageEmployee={openMessageWithEmployee}
           onOpenChange={(open) => !open && setSelectedEmployee(null)}
         />
