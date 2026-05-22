@@ -22,6 +22,7 @@ import {
   groupMembers,
   groups,
   messages,
+  user as users,
 } from "./db/schema"
 import { env } from "./env"
 import {
@@ -29,10 +30,12 @@ import {
   canAdminReadConversations,
   currentEmployee,
   jsonError,
+  isSuperAdminEmail,
   requireAdmin,
   requireMembership,
   requireOwner,
   requireSession,
+  requireSuperAdmin,
 } from "./http"
 import { isAllowedWebOrigin } from "./origins"
 import {
@@ -51,6 +54,7 @@ import { ensureCompanyEmployeeEmbeddings } from "./services/ai/embeddings"
 import {
   LocalAiError,
   chatJson,
+  chatStream,
   chatStrict,
   checkOllama,
   embedText,
@@ -148,9 +152,24 @@ const assistantIntentSchema = z.object({
 })
 
 type AssistantIntent = z.infer<typeof assistantIntentSchema>
+type AssistantCandidateInternal = Parameters<typeof serializeCandidate>[0]
 
 const companySettingsInput = z.object({
   adminCanReadConversations: z.boolean(),
+})
+
+const superAdminCompanyInput = z.object({
+  name: z.string().trim().min(2),
+  slug: z.preprocess(
+    (value) => (typeof value === "string" && !value.trim() ? undefined : value),
+    z.string().trim().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
+  ),
+  timezone: z.string().trim().min(2).default("Europe/Paris"),
+  adminCanReadConversations: z.boolean().default(false),
+  ownerName: z.string().trim().min(2).optional(),
+  ownerEmail: z.string().trim().email().optional(),
+  ownerTitle: z.string().trim().min(2).default("Owner"),
+  ownerPassword: z.string().min(8).optional(),
 })
 
 const COMMUNITY_STORAGE_DIR = fileURLToPath(new URL("../storage/community", import.meta.url))
@@ -280,6 +299,78 @@ function param(value: unknown) {
   return String(value)
 }
 
+function slugifyCompanyName(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-")
+}
+
+async function getOrCreateUser(input: { name: string; email: string; password?: string }) {
+  const email = input.email.toLowerCase()
+  const [existing] = await db.select().from(users).where(ilike(users.email, email)).limit(1)
+  if (existing) {
+    return existing
+  }
+
+  const signedUpResponse = await auth.api.signUpEmail({
+    body: {
+      name: input.name,
+      email,
+      password: input.password ?? "Companinator123!",
+    },
+  } as never)
+  const signedUp = (signedUpResponse instanceof Response ? await signedUpResponse.json() : signedUpResponse) as {
+    user: { id: string }
+  }
+
+  const [created] = await db.select().from(users).where(eq(users.id, signedUp.user.id)).limit(1)
+  if (!created) {
+    throw new HttpError(500, `Impossible de creer l'utilisateur ${email}`)
+  }
+  return created
+}
+
+async function serializeSystemCompany(company: typeof companies.$inferSelect, currentUserId: string) {
+  const [employeeCount] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(employees)
+    .where(and(eq(employees.companyId, company.id), eq(employees.status, "active")))
+  const [membershipCount] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(companyMemberships)
+    .where(eq(companyMemberships.companyId, company.id))
+  const [conversationCount] = await db
+    .select({ count: sql<number>`count(*)::int` })
+    .from(conversations)
+    .where(eq(conversations.companyId, company.id))
+  const owners = await db
+    .select({ id: users.id, name: users.name, email: users.email })
+    .from(companyMemberships)
+    .innerJoin(users, eq(users.id, companyMemberships.userId))
+    .where(and(eq(companyMemberships.companyId, company.id), eq(companyMemberships.role, "owner")))
+    .orderBy(asc(users.name))
+  const [currentMembership] = await db
+    .select({ role: companyMemberships.role })
+    .from(companyMemberships)
+    .where(and(eq(companyMemberships.companyId, company.id), eq(companyMemberships.userId, currentUserId)))
+    .limit(1)
+
+  return {
+    ...serializeCompany(company),
+    createdAt: company.createdAt.toISOString(),
+    updatedAt: company.updatedAt.toISOString(),
+    employeeCount: employeeCount?.count ?? 0,
+    membershipCount: membershipCount?.count ?? 0,
+    conversationCount: conversationCount?.count ?? 0,
+    owners,
+    currentUserRole: currentMembership?.role ?? null,
+  }
+}
+
 async function assertNoManagerCycle(companyId: string, employeeId: string, managerId: string | null | undefined) {
   if (!managerId) {
     return
@@ -399,6 +490,101 @@ async function interpretAssistantQuery(query: string): Promise<AssistantIntent> 
   return expandAssistantIntent(intent, query)
 }
 
+async function buildAssistantContext(companyId: string, query: string) {
+  const intent = await interpretAssistantQuery(query)
+  await ensureCompanyEmployeeEmbeddings(companyId)
+
+  const embedding = await embedTextStrict(intent.searchQuery)
+  const distance = sql<number>`${employees.jobEmbedding} <=> ${vectorLiteral(embedding)}::vector`
+  const semanticRows = await db
+    .select({ employee: employees, distance })
+    .from(employees)
+    .where(and(eq(employees.companyId, companyId), eq(employees.status, "active"), isNotNull(employees.jobEmbedding)))
+    .orderBy(distance)
+    .limit(14)
+
+  const date = parseLocalDate(intent.date)
+  const availabilityChecked = Boolean(date)
+  const eventRows = date
+    ? await db
+        .select()
+        .from(employeeEvents)
+        .where(
+          and(
+            eq(employeeEvents.companyId, companyId),
+            gt(employeeEvents.endsAt, businessWindow(date).start),
+            lt(employeeEvents.startsAt, businessWindow(date).end),
+          ),
+        )
+    : []
+
+  const intentTerms = [intent.role, ...intent.skills, ...intent.departments]
+    .filter((term): term is string => Boolean(term))
+    .map((term) => term.toLowerCase())
+
+  const candidates: AssistantCandidateInternal[] = semanticRows
+    .map((row) => {
+      const employee = row.employee
+      const events = eventRows.filter((event) => event.employeeId === employee.id)
+      const nextFreeSlot = date ? findFirstFreeSlot(events, date, intent.durationMinutes) : null
+      const semanticScore = Math.max(0, 1 - Number(row.distance ?? 1))
+      const haystack = `${employee.title} ${employee.department ?? ""} ${employee.jobDescription}`.toLowerCase()
+      const intentBoost = intentTerms.some((term) => haystack.includes(term)) ? 0.08 : 0
+      const available = date ? Boolean(nextFreeSlot) : true
+      const availabilityBoost = availabilityChecked ? (available ? 0.08 : -0.12) : 0
+      return {
+        employee,
+        score: Number((semanticScore + intentBoost + availabilityBoost).toFixed(3)),
+        available,
+        reason: available
+          ? date
+            ? `Disponible le ${formatLocalDate(date)}`
+            : "Profil proche de la demande en recherche vectorielle"
+          : `Pas de creneau libre de ${intent.durationMinutes} minutes sur la journee`,
+        nextFreeSlot,
+      }
+    })
+    .sort((left, right) => right.score - left.score)
+    .slice(0, 8)
+
+  return { intent, date, availabilityChecked, candidates }
+}
+
+function assistantAnswerPrompt({
+  query,
+  intent,
+  candidates,
+  availabilityChecked,
+}: {
+  query: string
+  intent: AssistantIntent
+  candidates: AssistantCandidateInternal[]
+  availabilityChecked: boolean
+}) {
+  return [
+    `Demande initiale: ${query}`,
+    `Intention extraite: ${JSON.stringify(intent)}`,
+    `Candidats classes: ${JSON.stringify(
+      candidates.map((candidate) => ({
+        name: candidate.employee.name,
+        handle: `@${employeeHandle(candidate.employee)}`,
+        title: candidate.employee.title,
+        department: candidate.employee.department,
+        available: candidate.available,
+        score: candidate.score,
+        nextFreeSlot: candidate.nextFreeSlot ? candidate.nextFreeSlot.toISOString() : null,
+      })),
+    )}`,
+    availabilityChecked
+      ? "Une date est demandee: tu peux parler des disponibilites et des premiers creneaux libres."
+      : "Aucune date n'est demandee: ne parle pas de disponibilite, parle seulement de pertinence des profils.",
+    "Reponds directement en francais, sans meta-commentaire du type voici la proposition.",
+    "Redige une phrase naturelle, pas une liste brute, et ne pose pas de question finale.",
+    "Mentionne les profils pertinents avec leur handle exact en minuscules, par exemple @prenom_nom, pour que l'interface puisse ouvrir leur fiche.",
+    "Mentionne uniquement des handles fournis dans les candidats classes.",
+  ].join("\n")
+}
+
 const sockets = new Map<string, Set<{ send: (data: string) => void }>>()
 
 function broadcastConversation(conversationId: string, payload: unknown) {
@@ -474,6 +660,7 @@ export const app = new Elysia()
 
       return {
         user: session.user,
+        isSystemAdmin: isSuperAdminEmail(session.user.email),
         memberships: rows.map((row) => ({
           companyId: row.membership.companyId,
           role: row.membership.role,
@@ -482,6 +669,71 @@ export const app = new Elysia()
         activeCompanyId: activeCompany?.id ?? null,
         employee: employee ? serializeEmployee(employee) : null,
       }
+    } catch (error) {
+      return jsonError(error)
+    }
+  })
+  .get("/api/super-admin/companies", async ({ request }) => {
+    try {
+      const session = await requireSuperAdmin(request)
+      const rows = await db.select().from(companies).orderBy(asc(companies.name))
+      return Promise.all(rows.map((company) => serializeSystemCompany(company, session.user.id)))
+    } catch (error) {
+      return jsonError(error)
+    }
+  })
+  .post("/api/super-admin/companies", async ({ request, body }) => {
+    try {
+      const session = await requireSuperAdmin(request)
+      const input = parseBody(superAdminCompanyInput, body)
+      const slug = input.slug ?? slugifyCompanyName(input.name)
+      if (!slug) {
+        throw new HttpError(400, "Slug entreprise invalide")
+      }
+
+      const [existingSlug] = await db.select({ id: companies.id }).from(companies).where(eq(companies.slug, slug)).limit(1)
+      if (existingSlug) {
+        throw new HttpError(409, "Ce slug entreprise existe deja")
+      }
+
+      const ownerEmail = (input.ownerEmail ?? session.user.email).toLowerCase()
+      const ownerName = input.ownerName ?? session.user.name ?? ownerEmail.split("@")[0] ?? "Owner"
+      const owner = await getOrCreateUser({
+        name: ownerName,
+        email: ownerEmail,
+        password: input.ownerPassword,
+      })
+      const ownerDescription = `${ownerName} pilote le deploiement de ${input.name}, gere les premiers acces et structure la gouvernance de l'entreprise.`
+      const embedding = await embedText(`${input.ownerTitle}\nDirection\n${ownerDescription}`)
+
+      const [company] = await db
+        .insert(companies)
+        .values({
+          name: input.name,
+          slug,
+          timezone: input.timezone,
+          adminCanReadConversations: input.adminCanReadConversations,
+        })
+        .returning()
+
+      await db.insert(companyMemberships).values({
+        companyId: company.id,
+        userId: owner.id,
+        role: "owner",
+      })
+
+      await db.insert(employees).values({
+        companyId: company.id,
+        userId: owner.id,
+        name: ownerName,
+        email: ownerEmail,
+        title: input.ownerTitle,
+        department: "Direction",
+        jobDescription: ownerDescription,
+        jobEmbedding: embedding,
+      })
+
+      return serializeSystemCompany(company, session.user.id)
     } catch (error) {
       return jsonError(error)
     }
@@ -761,6 +1013,76 @@ export const app = new Elysia()
       return jsonError(error)
     }
   })
+  .post("/api/companies/:companyId/assistant/stream", async ({ request, params, body }) => {
+    try {
+      const companyId = param(params.companyId)
+      await requireMembership(request, companyId)
+      const input = parseBody(assistantInput, body)
+      const ollama = await checkOllama()
+
+      if (!ollama.available) {
+        throw new HttpError(503, ollamaSetupMessage(ollama))
+      }
+
+      const { intent, date, availabilityChecked, candidates } = await buildAssistantContext(companyId, input.query)
+      const prompt = assistantAnswerPrompt({ query: input.query, intent, candidates, availabilityChecked })
+      const encoder = new TextEncoder()
+
+      const stream = new ReadableStream({
+        async start(controller) {
+          const send = (payload: unknown) => {
+            controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`))
+          }
+
+          try {
+            send({
+              type: "metadata",
+              data: {
+                interpretedRole: intent.role,
+                interpretedDate: date ? formatLocalDate(date) : null,
+                candidates: candidates.map(serializeCandidate),
+                ollamaAvailable: true,
+              },
+            })
+
+            let answer = ""
+            for await (const delta of chatStream(prompt)) {
+              answer += delta
+              send({ type: "delta", data: delta })
+            }
+
+            send({ type: "done", data: { answer } })
+            controller.close()
+          } catch (error) {
+            send({
+              type: "error",
+              error:
+                error instanceof Error
+                  ? error.message
+                  : "Erreur pendant la generation de la reponse.",
+            })
+            controller.close()
+          }
+        },
+      })
+
+      return new Response(stream, {
+        headers: {
+          "content-type": "application/x-ndjson; charset=utf-8",
+          "cache-control": "no-cache, no-transform",
+          "x-accel-buffering": "no",
+        },
+      })
+    } catch (error) {
+      if (error instanceof LocalAiError) {
+        return jsonError(new HttpError(error.status, error.message))
+      }
+      if (error instanceof Error && error.name === "TimeoutError") {
+        return jsonError(new HttpError(503, "IA locale indisponible: Ollama n'a pas repondu assez vite."))
+      }
+      return jsonError(error)
+    }
+  })
   .post("/api/companies/:companyId/assistant/query", async ({ request, params, body }) => {
     try {
       const companyId = param(params.companyId)
@@ -772,85 +1094,10 @@ export const app = new Elysia()
         throw new HttpError(503, ollamaSetupMessage(ollama))
       }
 
-      const intent = await interpretAssistantQuery(input.query)
-      await ensureCompanyEmployeeEmbeddings(companyId)
-
-      const embedding = await embedTextStrict(intent.searchQuery)
-      const distance = sql<number>`${employees.jobEmbedding} <=> ${vectorLiteral(embedding)}::vector`
-      const semanticRows = await db
-        .select({ employee: employees, distance })
-        .from(employees)
-        .where(and(eq(employees.companyId, companyId), eq(employees.status, "active"), isNotNull(employees.jobEmbedding)))
-        .orderBy(distance)
-        .limit(14)
-
-      const date = parseLocalDate(intent.date)
-      const availabilityChecked = Boolean(date)
-      const eventRows = date
-        ? await db
-            .select()
-            .from(employeeEvents)
-            .where(
-              and(
-                eq(employeeEvents.companyId, companyId),
-                gt(employeeEvents.endsAt, businessWindow(date).start),
-                lt(employeeEvents.startsAt, businessWindow(date).end),
-              ),
-            )
-        : []
-
-      const intentTerms = [intent.role, ...intent.skills, ...intent.departments]
-        .filter((term): term is string => Boolean(term))
-        .map((term) => term.toLowerCase())
-
-      const candidates = semanticRows
-        .map((row) => {
-          const employee = row.employee
-          const events = eventRows.filter((event) => event.employeeId === employee.id)
-          const nextFreeSlot = date ? findFirstFreeSlot(events, date, intent.durationMinutes) : null
-          const semanticScore = Math.max(0, 1 - Number(row.distance ?? 1))
-          const haystack = `${employee.title} ${employee.department ?? ""} ${employee.jobDescription}`.toLowerCase()
-          const intentBoost = intentTerms.some((term) => haystack.includes(term)) ? 0.08 : 0
-          const available = date ? Boolean(nextFreeSlot) : true
-          const availabilityBoost = availabilityChecked ? (available ? 0.08 : -0.12) : 0
-          return {
-            employee,
-            score: Number((semanticScore + intentBoost + availabilityBoost).toFixed(3)),
-            available,
-            reason: available
-              ? date
-                ? `Disponible le ${formatLocalDate(date)}`
-                : "Profil proche de la demande en recherche vectorielle"
-              : `Pas de creneau libre de ${intent.durationMinutes} minutes sur la journee`,
-            nextFreeSlot,
-          }
-        })
-        .sort((left, right) => right.score - left.score)
-        .slice(0, 8)
+      const { intent, date, availabilityChecked, candidates } = await buildAssistantContext(companyId, input.query)
 
       const llmAnswer = await chatStrict(
-        [
-          `Demande initiale: ${input.query}`,
-          `Intention extraite: ${JSON.stringify(intent)}`,
-          `Candidats classes: ${JSON.stringify(
-            candidates.map((candidate) => ({
-              name: candidate.employee.name,
-              handle: `@${employeeHandle(candidate.employee)}`,
-              title: candidate.employee.title,
-              department: candidate.employee.department,
-              available: candidate.available,
-              score: candidate.score,
-              nextFreeSlot: candidate.nextFreeSlot ? candidate.nextFreeSlot.toISOString() : null,
-            })),
-          )}`,
-          availabilityChecked
-            ? "Une date est demandee: tu peux parler des disponibilites et des premiers creneaux libres."
-            : "Aucune date n'est demandee: ne parle pas de disponibilite, parle seulement de pertinence des profils.",
-          "Reponds directement en francais, sans meta-commentaire du type voici la proposition.",
-          "Redige une phrase naturelle, pas une liste brute, et ne pose pas de question finale.",
-          "Mentionne les profils pertinents avec leur handle exact en minuscules, par exemple @prenom_nom, pour que l'interface puisse ouvrir leur fiche.",
-          "Mentionne uniquement des handles fournis dans les candidats classes.",
-        ].join("\n"),
+        assistantAnswerPrompt({ query: input.query, intent, candidates, availabilityChecked }),
       )
 
       return {

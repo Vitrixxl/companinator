@@ -39,6 +39,8 @@ Tous les comptes utilisent le mot de passe `Companinator123!`.
 
 Le seed cree `Acme France` avec 20 employes, 14 evenements, 5 groupes, 5 posts communautaires et 3 conversations.
 
+`admin@acme.local` est aussi super admin plateforme via `SUPER_ADMIN_EMAILS`. Cette allowlist donne acces a l'onglet `Gros Admin` pour creer et piloter les entreprises.
+
 ## Stockage Local
 
 Les images de l'onglet communaute sont stockees localement dans `apps/api/storage/community` et servies par l'API via `/api/uploads/community/:fileName`.

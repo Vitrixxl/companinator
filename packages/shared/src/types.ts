@@ -11,6 +11,20 @@ export interface CompanyDTO {
   adminCanReadConversations: boolean
 }
 
+export interface SystemCompanyDTO extends CompanyDTO {
+  createdAt: string
+  updatedAt: string
+  employeeCount: number
+  membershipCount: number
+  conversationCount: number
+  owners: Array<{
+    id: string
+    name: string
+    email: string
+  }>
+  currentUserRole: MembershipRole | null
+}
+
 export interface MembershipDTO {
   companyId: string
   role: MembershipRole

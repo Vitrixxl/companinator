@@ -3,6 +3,7 @@ import { and, eq } from "drizzle-orm"
 import { auth } from "./auth"
 import { db } from "./db/client"
 import { companyMemberships, employees, type CompanyMembership, type Employee } from "./db/schema"
+import { env } from "./env"
 
 export class HttpError extends Error {
   constructor(
@@ -27,6 +28,24 @@ export async function requireSession(request: Request) {
 
   if (!session) {
     throw new HttpError(401, "Session requise")
+  }
+
+  return session
+}
+
+export function isSuperAdminEmail(email: string) {
+  const allowedEmails = env.SUPER_ADMIN_EMAILS.split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+
+  return allowedEmails.includes(email.toLowerCase())
+}
+
+export async function requireSuperAdmin(request: Request) {
+  const session = await requireSession(request)
+
+  if (!isSuperAdminEmail(session.user.email)) {
+    throw new HttpError(403, "Droits plateforme requis")
   }
 
   return session

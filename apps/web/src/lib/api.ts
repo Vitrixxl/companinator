@@ -8,6 +8,7 @@ import type {
   GroupDTO,
   MessageDTO,
   MembershipDTO,
+  SystemCompanyDTO,
 } from "@workspace/shared"
 
 const API_PORT = import.meta.env.VITE_API_PORT ?? "3000"
@@ -77,6 +78,7 @@ export interface MeResponse {
   memberships: MembershipDTO[]
   activeCompanyId: string | null
   employee: EmployeeDTO | null
+  isSystemAdmin: boolean
 }
 
 export interface DashboardResponse {
@@ -169,6 +171,7 @@ export const getPosts = (companyId: string) => apiFetch<CommunityPostDTO[]>(`/co
 export const getGroups = (companyId: string) => apiFetch<GroupDTO[]>(`/companies/${companyId}/groups`)
 export const getAdminConversations = (companyId: string) =>
   apiFetch<AdminConversationResponse>(`/admin/companies/${companyId}/conversations`)
+export const getSuperAdminCompanies = () => apiFetch<SystemCompanyDTO[]>("/super-admin/companies")
 
 export function createEmployee(companyId: string, payload: Partial<EmployeeDTO>) {
   return apiFetch<EmployeeDTO>(`/companies/${companyId}/employees`, {
@@ -189,6 +192,84 @@ export function askAssistant(companyId: string, query: string) {
     method: "POST",
     body: JSON.stringify({ query }),
   })
+}
+
+export type AssistantStreamMetadata = Omit<AssistantResponseDTO, "answer">
+
+type AssistantStreamEvent =
+  | { type: "metadata"; data: AssistantStreamMetadata }
+  | { type: "delta"; data: string }
+  | { type: "done"; data: { answer: string } }
+  | { type: "error"; error: string }
+
+export async function streamAssistant(
+  companyId: string,
+  query: string,
+  handlers: {
+    onMetadata?: (metadata: AssistantStreamMetadata) => void
+    onDelta?: (delta: string) => void
+    onDone?: (answer: string) => void
+  },
+) {
+  const response = await fetch(`${API_URL}/companies/${companyId}/assistant/stream`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ query }),
+  })
+
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    throw new Error(payload?.error ?? `HTTP ${response.status}`)
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw new Error("Flux assistant indisponible.")
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+  let fullAnswer = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) {
+      break
+    }
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() ?? ""
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed) {
+        continue
+      }
+
+      const event = JSON.parse(trimmed) as AssistantStreamEvent
+      if (event.type === "metadata") {
+        handlers.onMetadata?.(event.data)
+        continue
+      }
+      if (event.type === "delta") {
+        fullAnswer += event.data
+        handlers.onDelta?.(event.data)
+        continue
+      }
+      if (event.type === "done") {
+        fullAnswer = event.data.answer || fullAnswer
+        handlers.onDone?.(fullAnswer)
+        return
+      }
+      if (event.type === "error") {
+        throw new Error(event.error)
+      }
+    }
+  }
+
+  handlers.onDone?.(fullAnswer)
 }
 
 export function createConversation(
@@ -236,6 +317,22 @@ export function createGroup(companyId: string, payload: { name: string; descript
 export function updateCompanySettings(companyId: string, payload: { adminCanReadConversations: boolean }) {
   return apiFetch<CompanyDTO>(`/admin/companies/${companyId}/settings`, {
     method: "PATCH",
+    body: JSON.stringify(payload),
+  })
+}
+
+export function createSuperAdminCompany(payload: {
+  name: string
+  slug?: string
+  timezone: string
+  adminCanReadConversations: boolean
+  ownerName?: string
+  ownerEmail?: string
+  ownerTitle: string
+  ownerPassword?: string
+}) {
+  return apiFetch<SystemCompanyDTO>("/super-admin/companies", {
+    method: "POST",
     body: JSON.stringify(payload),
   })
 }

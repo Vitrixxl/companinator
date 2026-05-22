@@ -153,6 +153,91 @@ export async function chatStrict(prompt: string, system?: string): Promise<strin
   return response
 }
 
+export async function* chatStream(prompt: string, system?: string): AsyncGenerator<string> {
+  await requireOllama()
+
+  let response: Response
+  try {
+    response = await fetch(`${env.OLLAMA_BASE_URL}/api/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: env.OLLAMA_CHAT_MODEL,
+        stream: true,
+        messages: [
+          {
+            role: "system",
+            content:
+              system ??
+              "Tu aides a trouver les bons employes dans une entreprise. Reponds en francais, de facon concise, sans inventer de disponibilites.",
+          },
+          { role: "user", content: prompt },
+        ],
+      }),
+      signal: AbortSignal.timeout(60000),
+    })
+  } catch (error) {
+    if (isTimeout(error)) {
+      throw new LocalAiError(localAiErrorMessage("la generation de reponse"))
+    }
+    throw error
+  }
+
+  if (!response.ok) {
+    throw new LocalAiError(`Ollama chat stream a echoue: HTTP ${response.status}`)
+  }
+
+  const reader = response.body?.getReader()
+  if (!reader) {
+    throw new LocalAiError("Ollama n'a pas ouvert de flux de reponse.")
+  }
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split("\n")
+      buffer = lines.pop() ?? ""
+
+      for (const line of lines) {
+        const trimmed = line.trim()
+        if (!trimmed) {
+          continue
+        }
+
+        const payload = JSON.parse(trimmed) as {
+          done?: boolean
+          message?: { content?: string }
+          response?: string
+        }
+
+        if (payload.done) {
+          return
+        }
+
+        const delta = payload.message?.content ?? payload.response
+        if (delta) {
+          yield delta
+        }
+      }
+    }
+  } catch (error) {
+    if (isTimeout(error)) {
+      throw new LocalAiError(localAiErrorMessage("la generation de reponse"))
+    }
+    throw error
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 function parseJsonContent(content: string) {
   const trimmed = content.trim()
   const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/)

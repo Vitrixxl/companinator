@@ -1,18 +1,16 @@
-import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react"
 import dagre from "dagre"
 import { format } from "date-fns"
 import {
   Activity,
   ArrowDownRight,
   ArrowUpRight,
-  AtSign,
   Bookmark,
   Building2,
   CalendarPlus,
   CalendarClock,
   ChevronRight,
   ChevronsRight,
-  CornerDownLeft,
   FileText,
   GitBranch,
   Globe2,
@@ -25,7 +23,6 @@ import {
   MapPin,
   MessageSquare,
   MessageCircle,
-  Mic,
   Network,
   Newspaper,
   Plus,
@@ -65,6 +62,7 @@ import type {
   EmployeeDTO,
   EmployeeEventDTO,
   MessageDTO,
+  SystemCompanyDTO,
 } from "@workspace/shared"
 import { Badge } from "@workspace/ui/components/badge"
 import { Button } from "@workspace/ui/components/button"
@@ -80,13 +78,13 @@ import { cn } from "@workspace/ui/lib/utils"
 
 import {
   WS_URL,
-  askAssistant,
   assetUrl,
   createEmployee,
   createConversation,
   createEvent,
   createGroup,
   createPost,
+  createSuperAdminCompany,
   getAdminConversations,
   getConversations,
   getDashboard,
@@ -97,15 +95,27 @@ import {
   getMe,
   getMessages,
   getPosts,
+  getSuperAdminCompanies,
   sendMessage,
   signIn,
   signOut,
+  streamAssistant,
+  type AssistantStreamMetadata,
   updateCompanySettings,
 } from "./lib/api"
 
 const queryClient = new QueryClient()
 
-type Section = "dashboard" | "hierarchy" | "employees" | "assistant" | "messages" | "community" | "groups" | "admin"
+type Section =
+  | "dashboard"
+  | "hierarchy"
+  | "employees"
+  | "assistant"
+  | "messages"
+  | "community"
+  | "groups"
+  | "admin"
+  | "superAdmin"
 
 type NavGroup = "workspace" | "community" | "governance"
 
@@ -124,6 +134,7 @@ const sections: Array<{
   { id: "community", number: "06", group: "community", label: "Communaute", icon: Newspaper },
   { id: "groups", number: "07", group: "community", label: "Groupes", icon: Building2 },
   { id: "admin", number: "08", group: "governance", label: "Admin", icon: Shield },
+  { id: "superAdmin", number: "09", group: "governance", label: "Gros Admin", icon: Globe2 },
 ]
 
 const navGroupLabels: Record<NavGroup, string> = {
@@ -131,16 +142,6 @@ const navGroupLabels: Record<NavGroup, string> = {
   community: "Communaute",
   governance: "Gouvernance",
 }
-
-const navGrouped: Array<{
-  id: NavGroup
-  label: string
-  items: typeof sections
-}> = (["workspace", "community", "governance"] as NavGroup[]).map((group) => ({
-  id: group,
-  label: navGroupLabels[group],
-  items: sections.filter((section) => section.group === group),
-}))
 
 const sectionCopy: Record<Section, { eyebrow: string; title: string; subtitle: string }> = {
   dashboard: {
@@ -182,6 +183,11 @@ const sectionCopy: Record<Section, { eyebrow: string; title: string; subtitle: s
     eyebrow: "Gouvernance · Confidentialite",
     title: "Admin",
     subtitle: "Droits de lecture, audit et politique de confidentialite.",
+  },
+  superAdmin: {
+    eyebrow: "Plateforme · Multi-tenant",
+    title: "Gros Admin",
+    subtitle: "Creation et pilotage des entreprises clientes.",
   },
 }
 
@@ -305,6 +311,16 @@ function employeeHandle(employee: Pick<EmployeeDTO, "name">) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
+}
+
+function slugifyCompanyName(value: string) {
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .replace(/-{2,}/g, "-")
 }
 
 function shortDate(value: string | null | undefined) {
@@ -1279,9 +1295,13 @@ const ASSISTANT_EXAMPLES = [
 
 function AssistantAnswer({
   answer,
+  content,
+  isStreaming,
   onSelectEmployee,
 }: {
   answer: AssistantResponseDTO
+  content?: string
+  isStreaming?: boolean
   onSelectEmployee: (employee: EmployeeDTO) => void
 }) {
   const mentions = new Map(
@@ -1290,30 +1310,123 @@ function AssistantAnswer({
       candidate.employee,
     ]),
   )
-  const parts = answer.answer.split(/(@[a-z0-9_]+)/gi)
+  const parts = (content ?? answer.answer).split(/(@[a-z0-9_]+)/gi)
 
   return (
-    <blockquote className="border-l-2 border-primary/40 pl-5 text-sm leading-relaxed">
-      <span className="eyebrow-tight mb-2 block text-primary">Reponse</span>
-      <p className="font-heading text-base leading-relaxed">
-        {parts.map((part, index) => {
-          const employee = mentions.get(part.toLowerCase())
-          if (!employee) {
-            return <span key={`${part}-${index}`}>{part}</span>
-          }
-          return (
-            <button
-              key={`${part}-${employee.id}-${index}`}
-              className="mx-0.5 inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-xs font-medium text-primary underline-offset-4 transition hover:bg-primary/15 hover:underline"
-              onClick={() => onSelectEmployee(employee)}
-              type="button"
-            >
-              {part}
-            </button>
-          )
-        })}
-      </p>
-    </blockquote>
+    <p className="text-sm leading-relaxed">
+      {parts.map((part, index) => {
+        const employee = mentions.get(part.toLowerCase())
+        if (!employee) {
+          return <span key={`${part}-${index}`}>{part}</span>
+        }
+        return (
+          <button
+            key={`${part}-${employee.id}-${index}`}
+            className="mx-0.5 inline-flex items-center rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-xs font-medium text-primary underline-offset-4 transition hover:bg-primary/15 hover:underline"
+            onClick={() => onSelectEmployee(employee)}
+            type="button"
+          >
+            {part}
+          </button>
+        )
+      })}
+      {isStreaming ? <span className="ml-1 inline-block h-4 w-1 animate-pulse bg-primary align-text-bottom" /> : null}
+    </p>
+  )
+}
+
+type AssistantChatMessage = {
+  id: string
+  role: "assistant" | "user"
+  content: string
+  createdAt: Date
+  answer?: AssistantResponseDTO
+  streamedContent?: string
+  isStreaming?: boolean
+  isError?: boolean
+}
+
+function assistantMessageId(role: AssistantChatMessage["role"]) {
+  return `${role}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+function AssistantChatBubble({
+  message,
+  onSelectEmployee,
+}: {
+  message: AssistantChatMessage
+  onSelectEmployee: (employee: EmployeeDTO) => void
+}) {
+  const isUser = message.role === "user"
+  const visibleAnswer = message.answer
+    ? message.streamedContent ?? (message.isStreaming ? "" : message.answer.answer)
+    : ""
+
+  return (
+    <article className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
+      {!isUser ? (
+        <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
+          <Sparkles className="size-4" />
+        </div>
+      ) : null}
+      <div
+        className={cn(
+          "grid max-w-[min(100%,46rem)] gap-4 rounded-2xl border px-4 py-3",
+          isUser
+            ? "bg-primary text-primary-foreground"
+            : message.isError
+              ? "border-destructive/25 bg-destructive/10 text-destructive"
+              : "bg-card",
+        )}
+      >
+        <div className={cn("flex items-center gap-2 text-[11px]", isUser ? "justify-end" : "justify-between")}>
+          <span
+            className={cn(
+              "font-mono uppercase tracking-wider",
+              isUser ? "text-primary-foreground/70" : "text-muted-foreground",
+            )}
+          >
+            {isUser ? "Vous" : "Assistant"}
+          </span>
+          <span
+            className={cn(
+              "font-mono uppercase tracking-wider tabular",
+              isUser ? "text-primary-foreground/70" : "text-muted-foreground",
+            )}
+          >
+            {format(message.createdAt, "HH:mm")}
+          </span>
+        </div>
+
+        {message.answer ? (
+          <div className="grid gap-4">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant="outline" className="rounded-md bg-background/70 font-mono">
+                <Tag className="size-3" /> {message.answer.interpretedRole ?? "role libre"}
+              </Badge>
+              <Badge variant="outline" className="rounded-md bg-background/70 font-mono">
+                <CalendarClock className="size-3" /> {message.answer.interpretedDate ?? "date non precisee"}
+              </Badge>
+              <Badge
+                variant={message.answer.ollamaAvailable ? "default" : "destructive"}
+                className="rounded-md font-mono"
+              >
+                <Zap className="size-3" />
+                {message.answer.ollamaAvailable ? "IA active" : "IA inactive"}
+              </Badge>
+            </div>
+            <AssistantAnswer
+              answer={message.answer}
+              content={visibleAnswer}
+              isStreaming={message.isStreaming}
+              onSelectEmployee={onSelectEmployee}
+            />
+          </div>
+        ) : (
+          <p className="text-sm leading-relaxed">{message.content}</p>
+        )}
+      </div>
+    </article>
   )
 }
 
@@ -1324,20 +1437,86 @@ function AssistantPage({
   companyId: string
   onSelectEmployee: (employee: EmployeeDTO) => void
 }) {
-  const [query, setQuery] = useState("Je voudrais faire un point avec un dev demain")
-  const [answer, setAnswer] = useState<AssistantResponseDTO | null>(null)
-  const mutation = useMutation({
-    mutationFn: () => askAssistant(companyId, query),
-    onSuccess: setAnswer,
+  const [query, setQuery] = useState("")
+  const [messages, setMessages] = useState<AssistantChatMessage[]>(() => [
+    {
+      id: "assistant-welcome",
+      role: "assistant",
+      content:
+        "Bonjour, decris le besoin, le role ou le creneau recherche. Je te proposerai les profils les plus pertinents.",
+      createdAt: new Date(),
+    },
+  ])
+  const chatEndRef = useRef<HTMLDivElement | null>(null)
+  const mutation = useMutation<AssistantResponseDTO, Error, string>({
+    mutationFn: (prompt) => askAssistant(companyId, prompt),
+    onSuccess: (response) => {
+      setMessages((current) => [
+        ...current,
+        {
+          id: assistantMessageId("assistant"),
+          role: "assistant",
+          content: response.answer,
+          answer: response,
+          createdAt: new Date(),
+        },
+      ])
+    },
+    onError: (error) => {
+      setMessages((current) => [
+        ...current,
+        {
+          id: assistantMessageId("assistant"),
+          role: "assistant",
+          content: `Je n'ai pas pu traiter la requete : ${error.message}`,
+          createdAt: new Date(),
+          isError: true,
+        },
+      ])
+    },
   })
+  const latestAnswer = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index]
+      if (message?.answer) {
+        return message.answer
+      }
+    }
+    return null
+  }, [messages])
+  const bestCandidate = latestAnswer?.candidates[0] ?? null
+  const userMessageCount = messages.filter((message) => message.role === "user").length
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" })
+  }, [messages, mutation.isPending])
+
+  const submitMessage = (rawPrompt: string) => {
+    const prompt = rawPrompt.trim()
+    if (!prompt || mutation.isPending) {
+      return
+    }
+
+    setMessages((current) => [
+      ...current,
+      {
+        id: assistantMessageId("user"),
+        role: "user",
+        content: prompt,
+        createdAt: new Date(),
+      },
+    ])
+    setQuery("")
+    mutation.mutate(prompt)
+  }
 
   return (
     <div className="editorial-enter grid gap-6">
       <PageOpener
         marker="04"
-        eyebrow="IA semantique · LLM local"
-        title="L'assistant."
-        description="Recherche vectorielle sur les descriptions de poste, croisee avec les disponibilites des employes. Tout fonctionne en local — Ollama + pgvector."
+        eyebrow="Chatbot · IA semantique"
+        title="Assistant conversationnel."
+        description="Un chatbot interne pour formuler un besoin en langage naturel, retrouver les profils pertinents et verifier leur disponibilite."
         meta={
           <div className="flex items-center gap-3">
             <Badge variant="outline" className="rounded-md font-mono">
@@ -1348,183 +1527,175 @@ function AssistantPage({
         }
       />
 
-      <div className="grid gap-6 xl:grid-cols-[440px_1fr]">
-        <aside className="grid gap-4">
-          <Card className="border-0 shadow-sm ring-1 ring-border/70">
-            <CardHeader className="gap-2">
-              <span className="eyebrow">Console · Requete naturelle</span>
-              <CardTitle className="font-heading text-xl">Posez votre question</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <form
-                className="grid gap-3"
-                onSubmit={(event) => {
-                  event.preventDefault()
-                  mutation.mutate()
-                }}
-              >
-                <div className="relative">
-                  <Textarea
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                    className="min-h-28 resize-none pr-9 font-heading text-base leading-relaxed"
-                  />
-                  <Mic className="absolute right-3 top-3 size-4 text-muted-foreground" />
-                </div>
-                {mutation.error ? (
-                  <div className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive">
-                    {mutation.error.message}
-                  </div>
-                ) : null}
-                <Button type="submit" disabled={mutation.isPending} size="lg">
-                  <ScanSearch />
-                  {mutation.isPending ? "Analyse en cours..." : "Lancer la recherche"}
-                  <span className="ml-auto flex items-center gap-1 font-mono text-[11px] opacity-70">
-                    <CornerDownLeft className="size-3" />
-                  </span>
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <section className="panel grid h-[calc(100svh-21rem)] min-h-[620px] grid-rows-[auto_1fr_auto] overflow-hidden">
+          <header className="flex flex-wrap items-center justify-between gap-4 border-b bg-card/90 px-5 py-4 backdrop-blur">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary">
+                <MessageCircle className="size-5" />
+              </div>
+              <div className="min-w-0">
+                <span className="eyebrow">Conversation</span>
+                <h3 className="truncate font-heading text-lg font-medium leading-tight">Chatbot assistant</h3>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="rounded-md font-mono">
+                {String(userMessageCount).padStart(2, "0")} demandes
+              </Badge>
+              <Badge variant={mutation.isPending ? "secondary" : "outline"} className="rounded-md font-mono">
+                {mutation.isPending ? "Analyse" : "Pret"}
+              </Badge>
+            </div>
+          </header>
 
-          <div className="grid gap-2">
-            <span className="eyebrow">Exemples · Requetes types</span>
-            <div className="grid gap-1.5">
+          <ScrollArea className="editorial-scroll min-h-0 px-4 py-5">
+            <div className="grid gap-5">
+              {messages.map((message) => (
+                <AssistantChatBubble
+                  key={message.id}
+                  message={message}
+                  onSelectEmployee={onSelectEmployee}
+                />
+              ))}
+              {mutation.isPending ? (
+                <article className="flex gap-3">
+                  <div className="grid size-9 shrink-0 place-items-center rounded-xl bg-primary/10 text-primary ring-1 ring-primary/20">
+                    <Sparkles className="size-4" />
+                  </div>
+                  <div className="grid gap-2 rounded-2xl border bg-card px-4 py-3">
+                    <span className="eyebrow-tight">Assistant</span>
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <ScanSearch className="size-4 animate-pulse" />
+                      Analyse des profils et disponibilites...
+                    </div>
+                  </div>
+                </article>
+              ) : null}
+              <div ref={chatEndRef} />
+            </div>
+          </ScrollArea>
+
+          <div className="border-t bg-muted/20 p-4">
+            <div className="mb-3 flex gap-2 overflow-x-auto pb-1">
               {ASSISTANT_EXAMPLES.map((example, index) => (
                 <button
                   key={example}
                   type="button"
-                  onClick={() => setQuery(example)}
-                  className="group/example grid grid-cols-[auto_1fr_auto] items-center gap-3 rounded-md border bg-card px-3 py-2 text-left text-xs transition hover:border-primary/40 hover:bg-muted/30"
+                  disabled={mutation.isPending}
+                  onClick={() => submitMessage(example)}
+                  className="group/example inline-flex shrink-0 items-center gap-2 rounded-full border bg-card px-3 py-1.5 text-xs transition hover:border-primary/40 hover:bg-background disabled:pointer-events-none disabled:opacity-50"
                 >
                   <span className="font-mono text-[10px] text-muted-foreground tabular">
                     {String(index + 1).padStart(2, "0")}
                   </span>
-                  <span className="line-clamp-1">{example}</span>
+                  <span>{example}</span>
                   <ChevronsRight className="size-3.5 text-muted-foreground transition group-hover/example:translate-x-0.5 group-hover/example:text-primary" />
                 </button>
               ))}
             </div>
+            <form
+              className="flex items-end gap-2"
+              onSubmit={(event) => {
+                event.preventDefault()
+                submitMessage(query)
+              }}
+            >
+              <Textarea
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault()
+                    submitMessage(query)
+                  }
+                }}
+                placeholder="Ex: Trouve un product manager disponible jeudi apres-midi"
+                className="max-h-40 min-h-16 resize-none bg-background text-sm leading-relaxed"
+              />
+              <Button
+                type="submit"
+                size="icon-lg"
+                disabled={!query.trim() || mutation.isPending}
+                aria-label="Envoyer"
+              >
+                <Send />
+              </Button>
+            </form>
           </div>
-        </aside>
-
-        <section className="grid gap-4">
-          {answer ? (
-            <>
-              <div className="panel grid gap-5 p-6">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="eyebrow">Interpretation</span>
-                    <Separator orientation="vertical" className="h-4" />
-                    <Badge variant="outline" className="rounded-md font-mono">
-                      <Tag className="size-3" /> {answer.interpretedRole ?? "role libre"}
-                    </Badge>
-                    <Badge variant="outline" className="rounded-md font-mono">
-                      <CalendarClock className="size-3" /> {answer.interpretedDate ?? "date non precisee"}
-                    </Badge>
-                  </div>
-                  <Badge
-                    variant={answer.ollamaAvailable ? "default" : "destructive"}
-                    className="rounded-md font-mono"
-                  >
-                    <Zap className="size-3" />
-                    {answer.ollamaAvailable ? "IA active" : "IA inactive"}
-                  </Badge>
-                </div>
-                <AssistantAnswer answer={answer} onSelectEmployee={onSelectEmployee} />
-              </div>
-
-              <div className="flex items-center gap-3">
-                <span className="eyebrow">Profils correspondants</span>
-                <span className="toc-leader" aria-hidden />
-                <span className="section-marker text-xs text-muted-foreground tabular">
-                  {String(answer.candidates.length).padStart(2, "0")} resultats
-                </span>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2">
-                {answer.candidates.map((candidate, index) => {
-                  const availabilityChecked = Boolean(answer.interpretedDate)
-                  const tone = departmentTone(candidate.employee.department)
-                  return (
-                    <button
-                      key={candidate.employee.id}
-                      className={cn(
-                        "panel group/candidate grid gap-3 border-l-2 p-5 text-left transition",
-                        "hover:-translate-y-0.5 hover:shadow-md",
-                        tone.accent,
-                      )}
-                      onClick={() => onSelectEmployee(candidate.employee)}
-                      type="button"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="font-mono text-[10px] uppercase tracking-wider text-muted-foreground tabular">
-                          Resultat {String(index + 1).padStart(2, "0")} · score {candidate.score}
-                        </span>
-                        <Badge
-                          variant={
-                            availabilityChecked
-                              ? candidate.available
-                                ? "default"
-                                : "destructive"
-                              : "outline"
-                          }
-                          className="rounded-md font-mono"
-                        >
-                          {availabilityChecked ? (candidate.available ? "Disponible" : "Occupe") : "Profil"}
-                        </Badge>
-                      </div>
-                      <div className="flex items-start gap-3">
-                        <div
-                          className={cn(
-                            "grid size-11 shrink-0 place-items-center rounded-md text-sm font-semibold ring-1",
-                            tone.avatar,
-                          )}
-                        >
-                          {initials(candidate.employee.name)}
-                        </div>
-                        <div className="min-w-0">
-                          <strong className="block font-heading text-base font-medium leading-tight">
-                            {candidate.employee.name}
-                          </strong>
-                          <p className="truncate text-sm text-muted-foreground">{candidate.employee.title}</p>
-                          <p className="mt-1 flex items-center gap-1 font-mono text-xs text-primary">
-                            <AtSign className="size-3" />
-                            {candidate.handle || employeeHandle(candidate.employee)}
-                          </p>
-                        </div>
-                      </div>
-                      <p className="border-t pt-3 text-sm leading-relaxed">{candidate.reason}</p>
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="eyebrow-tight">Score vectoriel</span>
-                        <div className="flex items-center gap-2">
-                          <div className="h-1 w-24 overflow-hidden rounded-full bg-muted">
-                            <div
-                              className={cn("h-full rounded-full", tone.bar)}
-                              style={{ width: `${Math.min(100, candidate.score * 100)}%` }}
-                            />
-                          </div>
-                          <span className="font-mono text-foreground tabular">{candidate.score}</span>
-                        </div>
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </>
-          ) : (
-            <div className="panel grid place-items-center gap-3 p-12 text-center">
-              <div className="grid size-12 place-items-center rounded-full bg-primary/10 text-primary">
-                <ScanSearch className="size-6" />
-              </div>
-              <p className="font-heading text-lg">Pose une question pour commencer</p>
-              <p className="max-w-md text-sm text-muted-foreground">
-                L'assistant analyse votre requete, identifie le poste recherche, lit les disponibilites des
-                profils correspondants et propose les candidats les plus pertinents.
-              </p>
-            </div>
-          )}
         </section>
+
+        <aside className="grid gap-4 xl:content-start">
+          <section className="panel grid gap-4 p-5">
+            <div className="flex items-center justify-between gap-3">
+              <span className="eyebrow">Contexte</span>
+              <Badge variant="outline" className="rounded-md font-mono">
+                pgvector
+              </Badge>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <span className="eyebrow-tight">Role</span>
+                <p className="mt-1 truncate font-medium">{latestAnswer?.interpretedRole ?? "Non defini"}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <span className="eyebrow-tight">Date</span>
+                <p className="mt-1 truncate font-medium">{latestAnswer?.interpretedDate ?? "Libre"}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <span className="eyebrow-tight">Resultats</span>
+                <p className="mt-1 font-heading text-xl tabular">{latestAnswer?.candidates.length ?? 0}</p>
+              </div>
+              <div className="rounded-lg border bg-muted/20 p-3">
+                <span className="eyebrow-tight">Moteur</span>
+                <p className="mt-1 font-medium">{latestAnswer?.ollamaAvailable === false ? "Fallback" : "Local"}</p>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel grid gap-4 p-5">
+            <span className="eyebrow">Profil recommande</span>
+            {bestCandidate ? (
+              <button
+                type="button"
+                onClick={() => onSelectEmployee(bestCandidate.employee)}
+                className="grid gap-3 rounded-lg border bg-card p-4 text-left transition hover:bg-muted/30"
+              >
+                <div className="flex items-start gap-3">
+                  <div
+                    className={cn(
+                      "grid size-11 shrink-0 place-items-center rounded-md text-sm font-semibold ring-1",
+                      departmentTone(bestCandidate.employee.department).avatar,
+                    )}
+                  >
+                    {initials(bestCandidate.employee.name)}
+                  </div>
+                  <div className="min-w-0">
+                    <strong className="block truncate font-heading text-base font-medium">
+                      {bestCandidate.employee.name}
+                    </strong>
+                    <p className="truncate text-xs text-muted-foreground">{bestCandidate.employee.title}</p>
+                  </div>
+                </div>
+                <p className="line-clamp-3 border-t pt-3 text-xs leading-relaxed text-muted-foreground">
+                  {bestCandidate.reason}
+                </p>
+              </button>
+            ) : (
+              <div className="hatch grid place-items-center rounded-lg py-10 text-center text-xs text-muted-foreground">
+                Aucun profil selectionne
+              </div>
+            )}
+          </section>
+
+          <section className="panel grid gap-3 p-5">
+            <span className="eyebrow">Modele</span>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              La conversation reste dans cette session. Chaque message interroge l'assistant semantique avec la
+              derniere demande envoyee.
+            </p>
+          </section>
+        </aside>
       </div>
     </div>
   )
@@ -2101,6 +2272,342 @@ function GroupsPage({ companyId, employees }: { companyId: string; employees: Em
 }
 
 // ─────────────────────────────────────────────────────────────
+//  Gros admin
+// ─────────────────────────────────────────────────────────────
+
+function SuperAdminPage({
+  currentUserName,
+  currentUserEmail,
+  onOpenCompany,
+}: {
+  currentUserName: string
+  currentUserEmail: string
+  onOpenCompany: (companyId: string) => void
+}) {
+  const client = useQueryClient()
+  const companies = useQuery({ queryKey: ["super-admin-companies"], queryFn: getSuperAdminCompanies })
+  const [name, setName] = useState("")
+  const [slug, setSlug] = useState("")
+  const [slugEdited, setSlugEdited] = useState(false)
+  const [timezone, setTimezone] = useState("Europe/Paris")
+  const [adminCanReadConversations, setAdminCanReadConversations] = useState(false)
+  const [ownerName, setOwnerName] = useState(currentUserName)
+  const [ownerEmail, setOwnerEmail] = useState(currentUserEmail)
+  const [ownerTitle, setOwnerTitle] = useState("Owner")
+  const [ownerPassword, setOwnerPassword] = useState("Companinator123!")
+
+  const companyRows = companies.data ?? []
+  const totals = companyRows.reduce(
+    (acc, company) => ({
+      employees: acc.employees + company.employeeCount,
+      members: acc.members + company.membershipCount,
+      conversations: acc.conversations + company.conversationCount,
+      readable: acc.readable + (company.adminCanReadConversations ? 1 : 0),
+    }),
+    { employees: 0, members: 0, conversations: 0, readable: 0 },
+  )
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      createSuperAdminCompany({
+        name,
+        slug: slug || undefined,
+        timezone,
+        adminCanReadConversations,
+        ownerName: ownerName || undefined,
+        ownerEmail: ownerEmail || undefined,
+        ownerTitle,
+        ownerPassword: ownerPassword || undefined,
+      }),
+    onSuccess: () => {
+      void client.invalidateQueries({ queryKey: ["super-admin-companies"] })
+      void client.invalidateQueries({ queryKey: ["me"] })
+      setName("")
+      setSlug("")
+      setSlugEdited(false)
+      setAdminCanReadConversations(false)
+    },
+  })
+
+  return (
+    <div className="editorial-enter grid gap-6">
+      <PageOpener
+        marker="09"
+        eyebrow="Plateforme · Multi-tenant"
+        title="Gros admin."
+        description="Creation des tenants, owners et premiers profils entreprise."
+        meta={
+          <Badge variant="outline" className="rounded-md font-mono">
+            <Globe2 className="size-3" /> System
+          </Badge>
+        }
+      />
+
+      <div className="grid gap-3 md:grid-cols-4">
+        <AdminMetric label="Entreprises" value={companyRows.length} icon={Building2} />
+        <AdminMetric label="Employes" value={totals.employees} icon={Users} />
+        <AdminMetric label="Membres" value={totals.members} icon={Shield} />
+        <AdminMetric label="Audit ouvert" value={totals.readable} icon={MessageSquare} />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-[0.82fr_1.18fr]">
+        <Card className="self-start border-0 shadow-sm ring-1 ring-border/70">
+          <CardHeader className="gap-2">
+            <span className="eyebrow">Creation · Entreprise</span>
+            <CardTitle className="font-heading text-xl">Nouveau tenant</CardTitle>
+            <CardDescription>Entreprise, owner initial et politique de confidentialite.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form
+              className="grid gap-4"
+              onSubmit={(event) => {
+                event.preventDefault()
+                mutation.mutate()
+              }}
+            >
+              <div className="grid gap-2">
+                <Label className="eyebrow-tight" htmlFor="company-name">
+                  Entreprise
+                </Label>
+                <Input
+                  id="company-name"
+                  value={name}
+                  onChange={(event) => {
+                    const nextName = event.target.value
+                    setName(nextName)
+                    if (!slugEdited) {
+                      setSlug(slugifyCompanyName(nextName))
+                    }
+                  }}
+                  placeholder="Nova Industrie"
+                  required
+                />
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label className="eyebrow-tight" htmlFor="company-slug">
+                    Slug
+                  </Label>
+                  <Input
+                    id="company-slug"
+                    value={slug}
+                    onChange={(event) => {
+                      setSlugEdited(true)
+                      setSlug(slugifyCompanyName(event.target.value))
+                    }}
+                    placeholder="nova-industrie"
+                    required
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label className="eyebrow-tight" htmlFor="company-timezone">
+                    Timezone
+                  </Label>
+                  <Input
+                    id="company-timezone"
+                    value={timezone}
+                    onChange={(event) => setTimezone(event.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <Separator />
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label className="eyebrow-tight" htmlFor="owner-name">
+                    Owner
+                  </Label>
+                  <Input
+                    id="owner-name"
+                    value={ownerName}
+                    onChange={(event) => setOwnerName(event.target.value)}
+                    required
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label className="eyebrow-tight" htmlFor="owner-email">
+                    Email owner
+                  </Label>
+                  <Input
+                    id="owner-email"
+                    type="email"
+                    value={ownerEmail}
+                    onChange={(event) => setOwnerEmail(event.target.value)}
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-2">
+                  <Label className="eyebrow-tight" htmlFor="owner-title">
+                    Poste owner
+                  </Label>
+                  <Input
+                    id="owner-title"
+                    value={ownerTitle}
+                    onChange={(event) => setOwnerTitle(event.target.value)}
+                    required
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <Label className="eyebrow-tight" htmlFor="owner-password">
+                    Mot de passe temporaire
+                  </Label>
+                  <Input
+                    id="owner-password"
+                    type="password"
+                    value={ownerPassword}
+                    onChange={(event) => setOwnerPassword(event.target.value)}
+                    minLength={8}
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between gap-4 rounded-xl border bg-muted/20 px-4 py-3">
+                <div>
+                  <p className="text-sm font-medium">Lecture admin des conversations</p>
+                  <p className="text-xs text-muted-foreground">Politique initiale du tenant.</p>
+                </div>
+                <Switch checked={adminCanReadConversations} onCheckedChange={setAdminCanReadConversations} />
+              </div>
+
+              {mutation.error ? (
+                <div className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                  {mutation.error.message}
+                </div>
+              ) : null}
+
+              <Button type="submit" disabled={mutation.isPending || !name || !slug}>
+                <Plus />
+                {mutation.isPending ? "Creation..." : "Creer l'entreprise"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-3">
+          <div className="flex items-center gap-3">
+            <span className="eyebrow">Tenants · Registre</span>
+            <span className="toc-leader" aria-hidden />
+            <span className="section-marker text-xs text-muted-foreground tabular">
+              {String(companyRows.length).padStart(2, "0")} entreprises
+            </span>
+          </div>
+          <div className="grid gap-3">
+            {companyRows.map((company) => (
+              <SystemCompanyCard key={company.id} company={company} onOpenCompany={onOpenCompany} />
+            ))}
+            {!companies.isLoading && companyRows.length === 0 ? (
+              <div className="hatch grid place-items-center rounded-xl py-12 text-xs text-muted-foreground">
+                Aucune entreprise creee.
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AdminMetric({
+  label,
+  value,
+  icon: Icon,
+}: {
+  label: string
+  value: number
+  icon: typeof LayoutDashboard
+}) {
+  return (
+    <div className="panel flex items-center justify-between gap-4 p-4">
+      <div className="grid gap-1">
+        <span className="eyebrow-tight">{label}</span>
+        <span className="font-heading text-2xl font-medium tabular">{String(value).padStart(2, "0")}</span>
+      </div>
+      <div className="grid size-10 place-items-center rounded-xl bg-primary/10 text-primary">
+        <Icon className="size-5" />
+      </div>
+    </div>
+  )
+}
+
+function SystemCompanyCard({
+  company,
+  onOpenCompany,
+}: {
+  company: SystemCompanyDTO
+  onOpenCompany: (companyId: string) => void
+}) {
+  return (
+    <div className="panel grid gap-4 p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="grid size-11 shrink-0 place-items-center rounded-2xl bg-primary/10 text-primary ring-1 ring-primary/15">
+            <Building2 className="size-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h3 className="font-heading text-xl font-medium">{company.name}</h3>
+              <Badge variant="outline" className="rounded-md font-mono">
+                {company.slug}
+              </Badge>
+            </div>
+            <p className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
+              Creee {shortDate(company.createdAt)} · {company.timezone}
+            </p>
+          </div>
+        </div>
+        {company.currentUserRole ? (
+          <Button variant="outline" size="sm" onClick={() => onOpenCompany(company.id)}>
+            <ArrowUpRight />
+            Ouvrir
+          </Button>
+        ) : (
+          <Badge variant="outline" className="rounded-md font-mono text-muted-foreground">
+            Hors espace
+          </Badge>
+        )}
+      </div>
+
+      <div className="grid gap-2 sm:grid-cols-3">
+        <div className="rounded-xl border bg-muted/20 px-3 py-2">
+          <span className="eyebrow-tight">Employes</span>
+          <p className="font-heading text-lg tabular">{company.employeeCount}</p>
+        </div>
+        <div className="rounded-xl border bg-muted/20 px-3 py-2">
+          <span className="eyebrow-tight">Membres</span>
+          <p className="font-heading text-lg tabular">{company.membershipCount}</p>
+        </div>
+        <div className="rounded-xl border bg-muted/20 px-3 py-2">
+          <span className="eyebrow-tight">Conversations</span>
+          <p className="font-heading text-lg tabular">{company.conversationCount}</p>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant={company.adminCanReadConversations ? "default" : "outline"} className="rounded-md font-mono">
+          {company.adminCanReadConversations ? "Audit complet" : "Mode prive"}
+        </Badge>
+        {company.currentUserRole ? (
+          <Badge variant="outline" className="rounded-md font-mono">
+            {company.currentUserRole}
+          </Badge>
+        ) : null}
+        {company.owners.map((owner) => (
+          <Badge key={owner.id} variant="outline" className="rounded-md font-mono">
+            {owner.email}
+          </Badge>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────
 //  Admin
 // ─────────────────────────────────────────────────────────────
 
@@ -2435,9 +2942,25 @@ function AppShell() {
   const [section, setSection] = useState<Section>("dashboard")
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeDTO | null>(null)
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null)
-  const companyId = me.data?.activeCompanyId ?? null
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null)
+  const isSystemAdmin = Boolean(me.data?.isSystemAdmin)
+  const companyId = selectedCompanyId ?? me.data?.activeCompanyId ?? null
   const membership = me.data?.memberships.find((item) => item.companyId === companyId) ?? null
+  const hasWorkspace = Boolean(companyId && membership)
   const isAdmin = membership?.role === "owner" || membership?.role === "admin"
+  const visibleSections = useMemo(
+    () => sections.filter((item) => (item.id === "superAdmin" ? isSystemAdmin : hasWorkspace)),
+    [hasWorkspace, isSystemAdmin],
+  )
+  const visibleNavGrouped = useMemo(
+    () =>
+      (["workspace", "community", "governance"] as NavGroup[]).map((group) => ({
+        id: group,
+        label: navGroupLabels[group],
+        items: visibleSections.filter((item) => item.group === group),
+      })),
+    [visibleSections],
+  )
   const employeesQuery = useQuery({
     queryKey: ["employees", companyId],
     queryFn: () => getEmployees(companyId!),
@@ -2455,6 +2978,15 @@ function AppShell() {
     enabled: Boolean(companyId),
   })
   const now = useClock()
+
+  useEffect(() => {
+    if (!isSystemAdmin && section === "superAdmin") {
+      setSection("dashboard")
+    }
+    if (isSystemAdmin && !hasWorkspace && section !== "superAdmin") {
+      setSection("superAdmin")
+    }
+  }, [hasWorkspace, isSystemAdmin, section])
 
   async function openMessageWithEmployee(employee: EmployeeDTO) {
     if (!companyId) {
@@ -2497,6 +3029,11 @@ function AppShell() {
     setSelectedConversationId(null)
   }, [])
 
+  const openCompany = useCallback((companyIdToOpen: string) => {
+    setSelectedCompanyId(companyIdToOpen)
+    setSection("dashboard")
+  }, [])
+
   if (me.isLoading) {
     return (
       <main className="editorial-shell grid min-h-svh place-items-center text-sm text-muted-foreground">
@@ -2512,7 +3049,7 @@ function AppShell() {
     return <LoginScreen onSignedIn={() => void client.invalidateQueries({ queryKey: ["me"] })} />
   }
 
-  if (!companyId || !membership) {
+  if (!hasWorkspace && !isSystemAdmin) {
     return (
       <main className="editorial-shell grid min-h-svh place-items-center">
         <div className="panel grid max-w-md gap-2 p-8 text-center">
@@ -2523,7 +3060,9 @@ function AppShell() {
     )
   }
 
-  const activeSection = sectionCopy[section]
+  const activeSection = sectionCopy[!hasWorkspace && isSystemAdmin ? "superAdmin" : section]
+  const activeCompanyName = membership?.company.name ?? "Plateforme"
+  const activeRole = membership?.role ?? "system"
 
   return (
     <div className="editorial-shell relative min-h-svh">
@@ -2543,18 +3082,18 @@ function AppShell() {
           <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
             <div className="grid gap-1 rounded-md border bg-muted/30 px-3 py-2">
               <span className="eyebrow-tight">Workspace</span>
-              <span className="line-clamp-1 font-medium">{membership.company.name}</span>
+              <span className="line-clamp-1 font-medium">{activeCompanyName}</span>
             </div>
             <div className="grid gap-1 rounded-md border bg-muted/30 px-3 py-2">
               <span className="eyebrow-tight">Role</span>
-              <span className="font-mono uppercase tracking-wider">{membership.role}</span>
+              <span className="font-mono uppercase tracking-wider">{activeRole}</span>
             </div>
           </div>
         </div>
 
         {/* TOC navigation */}
         <div className="editorial-scroll flex-1 overflow-y-auto px-3 py-5">
-          {navGrouped.map((group) => (
+          {visibleNavGrouped.map((group) => (
             <div key={group.id} className="mb-6">
               <div className="mb-2 flex items-center gap-2 px-3">
                 <span className="eyebrow">{group.label}</span>
@@ -2648,7 +3187,7 @@ function AppShell() {
                   <span className="eyebrow">{activeSection.eyebrow}</span>
                   <Separator orientation="vertical" className="h-3" />
                   <span className="font-mono text-[11px] uppercase tracking-wider text-muted-foreground">
-                    {membership.company.name} · {membership.role}
+                    {activeCompanyName} · {activeRole}
                   </span>
                 </div>
                 <h2 className="editorial-title text-3xl md:text-[2.25rem]">
@@ -2686,7 +3225,7 @@ function AppShell() {
         <div className="border-b bg-card px-4 py-3 lg:hidden">
           <ScrollArea className="editorial-scroll">
             <div className="flex gap-1.5 pb-2">
-              {sections.map((item) => (
+              {visibleSections.map((item) => (
                 <Button
                   key={item.id}
                   size="xs"
@@ -2707,7 +3246,7 @@ function AppShell() {
             section === "hierarchy" && "px-3 py-3 lg:px-5 lg:py-4",
           )}
         >
-          {section === "dashboard" ? (
+          {section === "dashboard" && companyId && membership ? (
             <DashboardPage
               companyId={companyId}
               employees={employees}
@@ -2716,16 +3255,16 @@ function AppShell() {
               companyName={membership.company.name}
             />
           ) : null}
-          {section === "hierarchy" ? (
+          {section === "hierarchy" && companyId ? (
             <HierarchyPage companyId={companyId} onSelectEmployee={setSelectedEmployee} />
           ) : null}
-          {section === "employees" ? (
+          {section === "employees" && companyId ? (
             <EmployeesPage companyId={companyId} employees={employees} onSelectEmployee={setSelectedEmployee} />
           ) : null}
-          {section === "assistant" ? (
+          {section === "assistant" && companyId ? (
             <AssistantPage companyId={companyId} onSelectEmployee={setSelectedEmployee} />
           ) : null}
-          {section === "messages" ? (
+          {section === "messages" && companyId ? (
             <MessagesPage
               companyId={companyId}
               employees={employees}
@@ -2734,13 +3273,20 @@ function AppShell() {
               onSelectedConversationOpened={clearSelectedConversation}
             />
           ) : null}
-          {section === "community" ? <CommunityPage companyId={companyId} employees={employees} /> : null}
-          {section === "groups" ? <GroupsPage companyId={companyId} employees={employees} /> : null}
-          {section === "admin" ? (
+          {section === "community" && companyId ? <CommunityPage companyId={companyId} employees={employees} /> : null}
+          {section === "groups" && companyId ? <GroupsPage companyId={companyId} employees={employees} /> : null}
+          {section === "admin" && companyId && membership ? (
             <AdminPage
               companyId={companyId}
               adminCanRead={membership.company.adminCanReadConversations}
               isAdmin={isAdmin}
+            />
+          ) : null}
+          {section === "superAdmin" && isSystemAdmin ? (
+            <SuperAdminPage
+              currentUserName={me.data?.user.name ?? ""}
+              currentUserEmail={me.data?.user.email ?? ""}
+              onOpenCompany={openCompany}
             />
           ) : null}
         </div>
@@ -2764,13 +3310,15 @@ function AppShell() {
         ) : null}
       </main>
 
-      <EmployeeSheet
-        companyId={companyId}
-        employee={selectedEmployee}
-        meEmployeeId={me.data?.employee?.id ?? null}
-        onMessageEmployee={openMessageWithEmployee}
-        onOpenChange={(open) => !open && setSelectedEmployee(null)}
-      />
+      {companyId ? (
+        <EmployeeSheet
+          companyId={companyId}
+          employee={selectedEmployee}
+          meEmployeeId={me.data?.employee?.id ?? null}
+          onMessageEmployee={openMessageWithEmployee}
+          onOpenChange={(open) => !open && setSelectedEmployee(null)}
+        />
+      ) : null}
     </div>
   )
 }

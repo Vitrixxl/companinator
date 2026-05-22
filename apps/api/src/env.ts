@@ -7,6 +7,7 @@ const envSchema = z.object({
   BETTER_AUTH_SECRET: z.string().default("dev-secret-change-me-in-production"),
   BETTER_AUTH_URL: z.string().default("http://localhost:3000"),
   WEB_ORIGIN: z.string().default("http://localhost:5173"),
+  SUPER_ADMIN_EMAILS: z.string().default("admin@acme.local"),
   OLLAMA_BASE_URL: z.string().default("http://localhost:11434"),
   OLLAMA_CHAT_MODEL: z.string().default("llama3.2"),
   OLLAMA_EMBED_MODEL: z.string().default("embeddinggemma"),
